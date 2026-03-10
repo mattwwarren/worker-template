@@ -51,7 +51,8 @@ class TestDbRetryDecorator:
             nonlocal call_count
             call_count += 1
             if call_count < 3:
-                raise OperationalError("connection lost", {}, Exception())
+                msg = "connection lost"
+                raise OperationalError(msg, {}, Exception())
             return "recovered"
 
         result = await flaky_func()
@@ -66,7 +67,8 @@ class TestDbRetryDecorator:
         async def always_fails():
             nonlocal call_count
             call_count += 1
-            raise OperationalError("connection lost", {}, Exception())
+            msg = "connection lost"
+            raise OperationalError(msg, {}, Exception())
 
         with pytest.raises(OperationalError):
             await always_fails()
@@ -80,7 +82,8 @@ class TestDbRetryDecorator:
         async def raises_value_error():
             nonlocal call_count
             call_count += 1
-            raise ValueError("not a db error")
+            msg = "not a db error"
+            raise ValueError(msg)
 
         with pytest.raises(ValueError, match="not a db error"):
             await raises_value_error()
@@ -101,7 +104,8 @@ class TestCreateDbRetry:
             nonlocal call_count
             call_count += 1
             if call_count < 5:
-                raise OperationalError("fail", {}, Exception())
+                msg = "fail"
+                raise OperationalError(msg, {}, Exception())
             return "ok"
 
         result = await flaky()

@@ -14,6 +14,15 @@ from taskiq import TaskiqMessage, TaskiqMiddleware, TaskiqResult
 
 from worker_template.db.session import async_session_maker
 from worker_template.models.task_execution import TaskStatus
+from worker_template.realtime.contracts import (
+    TASK_COMPLETED,
+    TASK_FAILED,
+    TASK_STATUS_CHANGED,
+    TaskCompletedEvent,
+    TaskFailedEvent,
+    TaskStatusEvent,
+)
+from worker_template.realtime.emitter import emit_task_event
 from worker_template.services.task_execution_service import get_task_execution, update_task_status
 
 LOGGER = logging.getLogger(__name__)
@@ -43,6 +52,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                 status_message="Task started",
             )
             await session.commit()
+        await self._emit_status_event(message, TaskStatus.RUNNING, status_message="Task started")
         return message
 
     async def post_execute(self, message: TaskiqMessage, result: TaskiqResult[Any]) -> None:
@@ -68,6 +78,12 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                     status_message="Task completed successfully",
                 )
             await session.commit()
+        if result.is_err:
+            await self._emit_status_event(
+                message, TaskStatus.FAILED, error_detail=str(result.error), status_message="Task failed"
+            )
+        else:
+            await self._emit_status_event(message, TaskStatus.COMPLETED, status_message="Task completed successfully")
 
     async def on_error(
         self,
@@ -80,15 +96,15 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         if task_execution_id is None:
             return
 
+        status = TaskStatus.FAILED
+        status_msg = "Task failed (max retries exceeded)"
+
         async with async_session_maker() as session:
             # Check if we should retry
             task = await get_task_execution(session, task_execution_id)
             if task is not None and task.retry_count < task.max_retries:
                 status = TaskStatus.RETRYING
                 status_msg = f"Retrying ({task.retry_count + 1}/{task.max_retries})"
-            else:
-                status = TaskStatus.FAILED
-                status_msg = "Task failed (max retries exceeded)"
 
             await update_task_status(
                 session,
@@ -98,6 +114,77 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                 status_message=status_msg,
             )
             await session.commit()
+        await self._emit_status_event(
+            message,
+            status,
+            error_detail=f"{type(exception).__name__}: {exception}",
+            status_message=status_msg,
+        )
+
+    async def _emit_status_event(
+        self,
+        message: TaskiqMessage,
+        status: TaskStatus,
+        *,
+        status_message: str | None = None,
+        error_detail: str | None = None,
+    ) -> None:
+        """Emit a real-time event for a status change. Fire-and-forget."""
+        task_execution_id = self._extract_task_execution_id(message)
+        if task_execution_id is None:
+            return
+
+        # Extract tenant_id from message
+        tenant_id = self._extract_tenant_id(message)
+        if tenant_id is None:
+            return
+
+        task_name = message.task_name
+
+        try:
+            if status == TaskStatus.COMPLETED:
+                event_data = TaskCompletedEvent(
+                    task_id=task_execution_id,
+                    task_name=task_name,
+                    tenant_id=tenant_id,
+                )
+                await emit_task_event(tenant_id, TASK_COMPLETED, event_data)
+            elif status == TaskStatus.FAILED:
+                event_data_failed = TaskFailedEvent(
+                    task_id=task_execution_id,
+                    task_name=task_name,
+                    error_detail=error_detail,
+                    tenant_id=tenant_id,
+                )
+                await emit_task_event(tenant_id, TASK_FAILED, event_data_failed)
+            else:
+                event_data_status = TaskStatusEvent(
+                    task_id=task_execution_id,
+                    task_name=task_name,
+                    status=status.value,
+                    status_message=status_message,
+                    tenant_id=tenant_id,
+                )
+                await emit_task_event(tenant_id, TASK_STATUS_CHANGED, event_data_status)
+        except Exception:
+            LOGGER.warning("realtime_emit_error", extra={"task_name": task_name}, exc_info=True)
+
+    def _extract_tenant_id(self, message: TaskiqMessage) -> UUID | None:
+        """Extract tenant_id from message kwargs or raw_input."""
+        tenant_key = "tenant_id"
+
+        if tenant_key in message.kwargs:
+            return self._parse_uuid(message.kwargs[tenant_key])
+
+        raw_input = message.kwargs.get(RAW_INPUT_KEY)
+        if isinstance(raw_input, dict) and tenant_key in raw_input:
+            return self._parse_uuid(raw_input[tenant_key])
+
+        tenant_label = message.labels.get(tenant_key)
+        if tenant_label is not None:
+            return self._parse_uuid(tenant_label)
+
+        return None
 
     def _extract_task_execution_id(self, message: TaskiqMessage) -> UUID | None:
         """Extract task_execution_id from message labels or kwargs."""

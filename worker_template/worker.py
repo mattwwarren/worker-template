@@ -11,6 +11,7 @@ from worker_template.broker import broker
 from worker_template.core.config import settings
 from worker_template.db.session import create_db_engine, create_session_maker
 from worker_template.middleware import register_middleware
+from worker_template.realtime.emitter import close_emitter, init_emitter
 
 # Import tasks to trigger @broker.task registration
 from worker_template.tasks import example_task as _example_task  # noqa: F401
@@ -36,6 +37,10 @@ async def on_startup(state: object) -> None:
     state.engine = engine  # type: ignore[attr-defined]
     state.session_maker = session_maker  # type: ignore[attr-defined]
 
+    # Initialize real-time event emitter
+    if settings.redis_url:
+        await init_emitter(settings.redis_url)
+
     LOGGER.info(
         "worker_started",
         extra={
@@ -52,4 +57,5 @@ async def on_shutdown(state: object) -> None:
     engine = getattr(state, "engine", None)
     if engine is not None:
         await engine.dispose()
+    await close_emitter()
     LOGGER.info("worker_shutdown")

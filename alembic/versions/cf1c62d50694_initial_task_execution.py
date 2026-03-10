@@ -1,14 +1,15 @@
 """initial_task_execution
 
 Revision ID: cf1c62d50694
-Revises: 
+Revises:
 Create Date: 2026-03-09 22:28:27.598546
 
 """
 import sqlalchemy as sa
 import sqlmodel
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = 'cf1c62d50694'

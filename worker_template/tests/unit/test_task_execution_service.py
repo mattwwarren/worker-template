@@ -4,8 +4,6 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-import pytest
-
 from worker_template.models.task_execution import TaskExecution, TaskStatus
 from worker_template.services.task_execution_service import (
     _TERMINAL_STATUSES,
@@ -19,8 +17,7 @@ from worker_template.services.task_execution_service import (
 
 def make_mock_session():
     """Create a mock AsyncSession."""
-    session = AsyncMock()
-    return session
+    return AsyncMock()
 
 
 def make_task_execution(
@@ -55,10 +52,10 @@ class TestCreateTaskExecution:
         tenant_id = uuid4()
 
         # Patch the TaskExecution constructor so we can verify what's passed
-        with patch("worker_template.services.task_execution_service.TaskExecution") as MockTE:
+        with patch("worker_template.services.task_execution_service.TaskExecution") as mock_te:
             mock_task = MagicMock()
             mock_task.id = uuid4()
-            MockTE.return_value = mock_task
+            mock_te.return_value = mock_task
 
             result = await create_task_execution(
                 session,
@@ -66,7 +63,7 @@ class TestCreateTaskExecution:
                 tenant_id=tenant_id,
             )
 
-            MockTE.assert_called_once_with(
+            mock_te.assert_called_once_with(
                 task_name="process_doc",
                 tenant_id=tenant_id,
                 config_snapshot=None,
@@ -85,10 +82,10 @@ class TestCreateTaskExecution:
         parent_id = uuid4()
         config = {"key": "value"}
 
-        with patch("worker_template.services.task_execution_service.TaskExecution") as MockTE:
+        with patch("worker_template.services.task_execution_service.TaskExecution") as mock_te:
             mock_task = MagicMock()
             mock_task.id = uuid4()
-            MockTE.return_value = mock_task
+            mock_te.return_value = mock_task
 
             result = await create_task_execution(
                 session,
@@ -100,7 +97,7 @@ class TestCreateTaskExecution:
                 total_steps=10,
             )
 
-            MockTE.assert_called_once_with(
+            mock_te.assert_called_once_with(
                 task_name="child_task",
                 tenant_id=tenant_id,
                 config_snapshot=config,
