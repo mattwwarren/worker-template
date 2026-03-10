@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+.python/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.coverage
+coverage.json
+htmlcov/
+
+# Linting
+.mypy_cache/
+.ruff_cache/
+
+# Environment
+.env
+.env.*
+!dotenv.example
+
+# DevSpace
+.devspace/
+
+# OS
+.DS_Store
+
+# Template output
+.templatized/
+
+# Uploads
+uploads/
