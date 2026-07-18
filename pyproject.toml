@@ -6,7 +6,7 @@ requires-python = ">=3.13,<3.14"
 dependencies = [
     "taskiq>=0.12.4",
     "taskiq-aio-pika>=0.6.0",
-    "taskiq-redis>=1.2.2",
+    "taskiq-redis>=1.2.3",
     "sqlmodel>=0.0.39",
     "asyncpg>=0.31.0",
     "alembic>=1.18.5",
@@ -39,10 +39,6 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 constraint-dependencies = [
-    "aio-pika<10",   # TODO: removed by the messaging-stack upgrade ticket
-    "aiormq<7",      # TODO: removed by the messaging-stack upgrade ticket
-    "pamqp<4",       # TODO: removed by the messaging-stack upgrade ticket
-    "redis<8",       # TODO: removed by the messaging-stack upgrade ticket
     "mypy<2",        # TODO: removed by the fastapi/starlette + mypy upgrade ticket
     "starlette<1",   # TODO: removed by the fastapi/starlette + mypy upgrade ticket
     "fastapi<0.139", # TODO: removed by the fastapi/starlette + mypy upgrade ticket
