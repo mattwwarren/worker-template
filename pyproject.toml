@@ -14,7 +14,7 @@ dependencies = [
     "prometheus-client>=0.25.0",
     "ecs-logging>=2.3.0",
     "tenacity>=9.1.4",
-    "fastapi>=0.138.2",
+    "fastapi>=0.139.0",
     "uvicorn[standard]>=0.51.0",
     "httpx>=0.28.1",
     "python-socketio>=5.16.3",
@@ -30,19 +30,12 @@ dev = [
     "filelock>=3.30.2",
     "psycopg[binary]>=3.3.4",
     "ruff>=0.15.22",
-    "mypy>=1.20.2",
+    "mypy>=2.3.0",
 ]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[tool.uv]
-constraint-dependencies = [
-    "mypy<2",        # TODO: removed by the fastapi/starlette + mypy upgrade ticket
-    "starlette<1",   # TODO: removed by the fastapi/starlette + mypy upgrade ticket
-    "fastapi<0.139", # TODO: removed by the fastapi/starlette + mypy upgrade ticket
-]
 
 [tool.ruff]
 line-length = 119
