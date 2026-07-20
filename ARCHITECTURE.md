@@ -119,12 +119,23 @@ top-to-bottom, `post_execute`/`on_error` bottom-to-top:
 3. **MetricsMiddleware** — Prometheus counters/histogram/gauge around every
    task (`tasks_started_total`, `task_duration_seconds`,
    `tasks_in_progress`, …).
-4. **StateTrackingMiddleware** — drives the `TaskExecution` state machine:
+4. **StateTrackingMiddleware** — records `TaskExecution` state transitions.
+   The full `TaskStatus` enum:
 
 ```
-PENDING → QUEUED → RUNNING → COMPLETED/FAILED
-                  ↳ RETRYING (label) ↳ CANCELLED
+PENDING → QUEUED → RUNNING → COMPLETED / FAILED / PARTIAL
+                  ↳ RETRYING (label only — see Known gaps)
+                  ↳ CANCELLED
 ```
+
+Of these, the middleware itself sets only `RUNNING` (pre_execute),
+`COMPLETED`/`FAILED` (post_execute), and `RETRYING`/`FAILED` (on_error).
+Creating the row in the first place (`create_task_execution`, which is what
+produces `PENDING`) is the dispatching caller's responsibility, and
+`QUEUED`/`CANCELLED`/`PARTIAL` are states an instance sets itself.
+
+(This section is the authoritative description of the state machine and
+middleware pipeline; other docs point here.)
 
 Two transaction boundaries exist by design, and they are independent:
 
@@ -143,8 +154,12 @@ State transitions also emit realtime events (fire-and-forget) — see below.
 > is wired. (2) `db/retry.py` (`@db_retry`, tenacity backoff for transient
 > `OperationalError`) exists and is tested but is not applied to any
 > production call site. (3) There is no idempotency-key pattern;
-> `parent_task_id` supports task trees, not dedup. Treat all three as
-> instance-level decisions, not shipped behavior.
+> `parent_task_id` supports task trees, not dedup. (4)
+> `create_task_execution` has no production call site — the shipped example
+> task doesn't thread a `task_execution_id`, so StateTrackingMiddleware
+> no-ops end-to-end for it; wiring row creation into dispatch is left to
+> the instance. Treat all four as instance-level decisions, not shipped
+> behavior.
 
 ## Data layer
 
@@ -189,9 +204,9 @@ guard that keeps the worker's copies in sync.
 
 ## Testing architecture
 
-- `TASKIQ_ENV=test` is set at the top of `tests/conftest.py` before any
-  import, so the broker singleton materializes as `InMemoryBroker` — no
-  RabbitMQ/Redis needed in tests.
+- `TASKIQ_ENV=test` is set at the top of `worker_template/tests/conftest.py`
+  before any import, so the broker singleton materializes as
+  `InMemoryBroker` — no RabbitMQ/Redis needed in tests.
 - `pytest-docker` starts Postgres from the repo-root
   `tests/docker-compose.yml`; migrations run via real Alembic; a filelock
   refcount makes container setup/teardown xdist-safe, with one database per
