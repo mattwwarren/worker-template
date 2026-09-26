@@ -53,10 +53,12 @@ class TestEmitStatusEvent:
         task_id = uuid4()
         tenant_id = uuid4()
         msg = make_message(
-            kwargs={"raw_input": {
-                "task_execution_id": str(task_id),
-                "tenant_id": str(tenant_id),
-            }},
+            kwargs={
+                "raw_input": {
+                    "task_execution_id": str(task_id),
+                    "tenant_id": str(tenant_id),
+                }
+            },
         )
 
         with patch(
@@ -78,10 +80,12 @@ class TestEmitStatusEvent:
         task_id = uuid4()
         tenant_id = uuid4()
         msg = make_message(
-            kwargs={"raw_input": {
-                "task_execution_id": str(task_id),
-                "tenant_id": str(tenant_id),
-            }},
+            kwargs={
+                "raw_input": {
+                    "task_execution_id": str(task_id),
+                    "tenant_id": str(tenant_id),
+                }
+            },
         )
 
         with patch(
@@ -102,19 +106,19 @@ class TestEmitStatusEvent:
         task_id = uuid4()
         tenant_id = uuid4()
         msg = make_message(
-            kwargs={"raw_input": {
-                "task_execution_id": str(task_id),
-                "tenant_id": str(tenant_id),
-            }},
+            kwargs={
+                "raw_input": {
+                    "task_execution_id": str(task_id),
+                    "tenant_id": str(tenant_id),
+                }
+            },
         )
 
         with patch(
             "worker_template.middleware.state_tracking.emit_task_event",
             new_callable=AsyncMock,
         ) as mock_emit:
-            await middleware._emit_status_event(
-                msg, TaskStatus.FAILED, error_detail="Something broke"
-            )
+            await middleware._emit_status_event(msg, TaskStatus.FAILED, error_detail="Something broke")
 
             mock_emit.assert_awaited_once()
             call_args = mock_emit.call_args
@@ -159,10 +163,12 @@ class TestEmitStatusEvent:
         task_id = uuid4()
         tenant_id = uuid4()
         msg = make_message(
-            kwargs={"raw_input": {
-                "task_execution_id": str(task_id),
-                "tenant_id": str(tenant_id),
-            }},
+            kwargs={
+                "raw_input": {
+                    "task_execution_id": str(task_id),
+                    "tenant_id": str(tenant_id),
+                }
+            },
         )
 
         with patch(

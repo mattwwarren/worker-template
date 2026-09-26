@@ -28,12 +28,8 @@ class TestInitEmitter:
 
             await emitter_mod.init_emitter("redis://localhost:6379/0")
 
-            mock_sio_module.AsyncRedisManager.assert_called_once_with(
-                "redis://localhost:6379/0", write_only=True
-            )
-            mock_sio_module.AsyncServer.assert_called_once_with(
-                async_mode="asgi", client_manager=mock_mgr
-            )
+            mock_sio_module.AsyncRedisManager.assert_called_once_with("redis://localhost:6379/0", write_only=True)
+            mock_sio_module.AsyncServer.assert_called_once_with(async_mode="asgi", client_manager=mock_mgr)
             assert emitter_mod._sio is mock_server
 
 
