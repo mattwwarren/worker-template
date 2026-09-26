@@ -3,6 +3,8 @@ _templates_suffix: ""
 _envops:
   keep_trailing_newline: true
 _exclude:
+  # Template-maintainer tooling config (cw / auto-dev tracker pin), not for generated projects
+  - ".claude/project-config.yaml"
   - "scripts/templatize.sh"
   - ".git"
   - ".git/**"
