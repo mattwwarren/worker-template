@@ -138,6 +138,9 @@ echo -e "${GREEN}[4/6] Updating configuration files...${NC}"
 # pyproject.toml - replace package references
 if [[ -f "${OUTPUT_DIR}/pyproject.toml" ]]; then
     sed -i "s/worker_template/${SED_REPLACEMENT}/g" "${OUTPUT_DIR}/pyproject.toml"
+    # [project].name uses the hyphenated distribution name; hatchling derives the
+    # package dir from it, so it must follow the renamed package or `uv sync` fails.
+    sed -i "s/^name = \"worker-template\"$/name = \"${SED_REPLACEMENT}\"/" "${OUTPUT_DIR}/pyproject.toml"
     echo "  Updated: pyproject.toml"
 fi
 
