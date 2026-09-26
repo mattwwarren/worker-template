@@ -142,6 +142,25 @@ if [[ -f "${OUTPUT_DIR}/pyproject.toml" ]]; then
     # package dir from it, so it must follow the renamed package or `uv sync` fails.
     sed -i "s/^name = \"worker-template\"$/name = \"${SED_REPLACEMENT}\"/" "${OUTPUT_DIR}/pyproject.toml"
     echo "  Updated: pyproject.toml"
+
+    # Generated projects ship without uv.lock (excluded above), so they resolve the
+    # newest releases, which can fail the generated project's own lint/type gates.
+    # Stopgap: add upper bounds in the generated pyproject.toml only, each with a
+    # "# Why:" comment. Lockfile-vs-pins policy:
+    # https://github.com/mattwwarren/worker-template/issues/22
+    cap_dependency() {
+        local pkg="$1" ceiling="$2" reason="$3"
+        local file="${OUTPUT_DIR}/pyproject.toml"
+        sed -i -E "s|^( *)\"${pkg}(>=[^\",]*)\",$|\1# Why: ${reason} See https://github.com/mattwwarren/worker-template/issues/22\n\1\"${pkg}\2,${ceiling}\",|" "$file"
+        if ! grep -qE "^ *\"${pkg}>=[^\",]*,${ceiling}\",$" "$file"; then
+            echo -e "${RED}ERROR: could not add ${pkg}${ceiling} ceiling to generated pyproject.toml${NC}"
+            exit 1
+        fi
+        echo "  Capped: ${pkg}${ceiling}"
+    }
+    cap_dependency "ruff" "<0.16" "ruff 0.16 adds lint violations (PLR0917) in generated code."
+    cap_dependency "mypy" "<2.4" "gate tooling capped at the minor version the template is verified against."
+    cap_dependency "sqlmodel" "<0.0.43" "sqlmodel 0.0.43+ changes Field typing, failing generated mypy."
 fi
 
 # alembic.ini - no changes needed (doesn't reference worker_template)
