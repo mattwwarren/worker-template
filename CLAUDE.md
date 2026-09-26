@@ -54,15 +54,15 @@ Tasks use Pydantic models for type-safe serialization:
 
 ### TaskExecution State Machine
 
-```
-PENDING -> QUEUED -> RUNNING -> COMPLETED/FAILED/PARTIAL
-                   ↳ RETRYING -> RUNNING (loop)
-                   ↳ CANCELLED
-```
+See [ARCHITECTURE.md](ARCHITECTURE.md) ("Task lifecycle and the middleware
+pipeline") — the authoritative state-machine and middleware-order
+reference. Note: `RETRYING` is a recorded status only; nothing re-enqueues
+the message automatically.
 
 ### Middleware Pipeline Order
 
 logging_mw -> tenant -> metrics_mw -> state_tracking
+(details in [ARCHITECTURE.md](ARCHITECTURE.md))
 
 ### Service Layer
 
@@ -145,7 +145,9 @@ uv run pytest
 - Task contracts (Pydantic models) for all task I/O
 - Middleware pipeline for cross-cutting concerns
 - TaskExecution state tracking for observability
-- Retry with exponential backoff via middleware
+- Retry status tracking via middleware (`RETRYING` is recorded, not
+  auto-re-enqueued; `db_retry` exists for transient DB failures but must be
+  applied explicitly)
 
 ### Testing Patterns
 
