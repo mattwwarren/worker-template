@@ -1,0 +1,33 @@
+# Project tooling config consumed by /auto-dev and cw headless workers.
+# Template-MAINTAINER file: excluded from Copier output via copier.yaml _exclude.
+#
+# tracking.primary.system is REQUIRED: without it, headless /auto-dev workers
+# default to the Linear MCP, which cannot complete interactive OAuth in a daemon
+# context and stalls until the watchdog reaps them.
+
+tracking:
+  primary:
+    system: github-issues
+    tool: gh
+    scope: "all template work — upgrades, bugs, best-practice lock-ins"
+    auto_create_issues: false
+    auto_close_on_complete: true
+
+review:
+  self_review: true
+  max_cycles: 3
+
+review_strategy:
+  mode: ci
+
+pr:
+  tool: gh
+  auto_create: false
+  branch_pattern: "{type}/{plan_id}"
+  # No CI workflow and no branch protection yet: gh pr merge --auto would merge
+  # instantly, before any check runs. Flip to true once ci.yml + required
+  # status checks on main exist.
+  auto_merge: false
+
+plan_exit:
+  mode: suggest
