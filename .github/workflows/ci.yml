@@ -32,7 +32,7 @@ jobs:
         run: uv python install
 
       - name: Install dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --extra dev
 
       - name: Cache mypy
         uses: actions/cache@v4
@@ -60,7 +60,7 @@ jobs:
         run: uv python install
 
       - name: Install dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --extra dev
 
       - name: Ruff check
         run: uv run ruff check .
@@ -83,7 +83,7 @@ jobs:
         run: uv python install
 
       - name: Install dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --extra dev
 
       - name: Cache mypy
         uses: actions/cache@v4
@@ -119,7 +119,7 @@ jobs:
             uv-${{ runner.os }}-
 
       - name: Install dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --extra dev
 
       - name: Run unit tests
         run: |
@@ -162,7 +162,7 @@ jobs:
             uv-${{ runner.os }}-
 
       - name: Install dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --extra dev
 
       - name: Run integration tests
         run: |
@@ -199,7 +199,7 @@ jobs:
         run: uv python install
 
       - name: Install dependencies
-        run: uv sync --frozen --extra dev
+        run: uv sync --extra dev
 
       - name: Download unit coverage
         uses: actions/download-artifact@v4
