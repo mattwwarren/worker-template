@@ -248,7 +248,8 @@ async def test_flaky_task_retries_until_success(
         "worker_template.middleware.state_tracking.settings.task_retry_tenant_allowlist", str(tenant_id)
     )
     monkeypatch.setattr(
-        "worker_template.middleware.state_tracking.settings.task_retry_task_allowlist", "_flaky_retry_task"
+        "worker_template.middleware.state_tracking.settings.task_retry_task_allowlist",
+        _flaky_retry_task.task_name,
     )
     task = await create_task_execution(
         session,
@@ -287,7 +288,8 @@ async def test_always_failing_task_exhausts_retries(
         "worker_template.middleware.state_tracking.settings.task_retry_tenant_allowlist", str(tenant_id)
     )
     monkeypatch.setattr(
-        "worker_template.middleware.state_tracking.settings.task_retry_task_allowlist", "_always_failing_task"
+        "worker_template.middleware.state_tracking.settings.task_retry_task_allowlist",
+        _always_failing_task.task_name,
     )
     task = await create_task_execution(
         session,
