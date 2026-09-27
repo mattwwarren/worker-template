@@ -215,5 +215,5 @@ class StateTrackingMiddleware(TaskiqMiddleware):
             return value
         try:
             return UUID(str(value))
-        except (ValueError, AttributeError):
+        except ValueError, AttributeError:
             return None
