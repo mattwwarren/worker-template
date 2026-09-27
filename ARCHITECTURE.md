@@ -15,16 +15,8 @@ produce the Copier template. Production instances are generated with
 `copier copy` and updated with `copier update`.
 
 Copier variables (`copier.yaml`): `project_name` / `project_slug` /
-`description` (identity), `port` (health server), `multi_tenant`,
-`enable_metrics`, `enable_scheduler`, `database_enabled`.
-
-> **Known gap:** `multi_tenant`, `enable_scheduler`, and `database_enabled`
-> are collected at generation time but are not wired to any conditional
-> generation logic — every generated project currently ships tenant
-> isolation, the scheduler deployment, and TaskExecution tracking regardless
-> of the answers. Only metrics has a working toggle, and it is the
-> **runtime** env var `ENABLE_METRICS` (gates mounting `/metrics` on the
-> health server), not the Copier variable.
+`description` (identity), `port` (health server), `enable_scheduler`
+(scheduler deployment).
 
 ## Process model
 
