@@ -9,7 +9,7 @@ from sqlmodel import Field, SQLModel
 
 
 class TimestampedTable(SQLModel):
-    id: UUID = Field(  # type: ignore[call-overload]
+    id: UUID = Field(
         primary_key=True,
         sa_type=PGUUID(as_uuid=True),
         sa_column_kwargs={
@@ -17,7 +17,7 @@ class TimestampedTable(SQLModel):
             "nullable": False,
         },
     )
-    created_at: datetime = Field(  # type: ignore[call-overload]
+    created_at: datetime = Field(
         sa_type=sa.DateTime(timezone=True),
         sa_column_kwargs={
             "server_default": sa.func.now(),
@@ -25,7 +25,7 @@ class TimestampedTable(SQLModel):
         },
         index=True,
     )
-    updated_at: datetime = Field(  # type: ignore[call-overload]
+    updated_at: datetime = Field(
         sa_type=sa.DateTime(timezone=True),
         sa_column_kwargs={
             "server_default": sa.func.now(),
