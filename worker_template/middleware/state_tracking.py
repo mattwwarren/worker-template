@@ -18,7 +18,7 @@ from taskiq.kicker import AsyncKicker
 from worker_template.core.config import settings
 from worker_template.db.retry import db_retry
 from worker_template.db.session import async_session_maker
-from worker_template.models.task_attempt import TaskDispatchResult
+from worker_template.models.task_attempt import TaskAttempt, TaskDispatchResult
 from worker_template.models.task_execution import TaskExecution, TaskStatus
 from worker_template.realtime.contracts import (
     TASK_COMPLETED,
@@ -29,7 +29,7 @@ from worker_template.realtime.contracts import (
     TaskStatusEvent,
 )
 from worker_template.realtime.emitter import emit_task_event
-from worker_template.services.task_attempt_service import record_task_attempt
+from worker_template.services.task_attempt_service import mark_task_attempt_dispatched, record_task_attempt
 from worker_template.services.task_execution_service import get_task_execution, update_task_status
 
 LOGGER = logging.getLogger(__name__)
@@ -46,6 +46,9 @@ class _OnErrorAttempt:
     recorded_status: TaskStatus | None = None
     recorded_retry_count: int | None = None
     status_message: str | None = None
+    pending_attempt: TaskAttempt | None = None
+    dispatch_completed: bool = False
+    attempt_number: int | None = None
 
 
 @dataclass
@@ -190,12 +193,11 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                 await self._record_initial_error_status(ctx, decision)
             await session.commit()
 
-            # result.error already NoResultError means a prior db_retry-internal
-            # attempt at this same call already dispatched the requeue before a
-            # transient OperationalError forced a retry of this method; skip
-            # re-dispatching (see the comment in _dispatch_retry, where it's set).
-            if decision.retry_allowed and not isinstance(result.error, NoResultError):
-                status, status_msg = await self._dispatch_retry(ctx, decision)
+            if decision.retry_allowed:
+                if attempt.dispatch_completed:
+                    await self._recover_dispatch_audit(ctx, decision)
+                else:
+                    status, status_msg = await self._dispatch_retry(ctx, decision)
 
             if decision.retry_shadowed:
                 result.__dict__[_SHADOW_RETRY_MARKER] = True
@@ -287,7 +289,8 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                 dispatch_result=dispatch_result,
             )
         elif decision.retry_allowed:
-            await record_task_attempt(
+            attempt.attempt_number = decision.attempt_number
+            attempt.pending_attempt = await record_task_attempt(
                 ctx.session,
                 task_execution_id=ctx.task_execution_id,
                 tenant_id=task.tenant_id,  # type: ignore[union-attr]
@@ -303,23 +306,21 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         task = ctx.task
         requeued = await self._requeue(ctx.message)
         if requeued:
-            # Mark the dispatch done immediately, before the audit-trail
-            # write/commit below: _requeue already sent the message, so a
-            # transient OperationalError on this commit must not cause a
-            # db_retry-driven re-invocation of this whole method to
-            # requeue (and thus double-dispatch) the same task again.
-            ctx.result.error = NoResultError()
-            await record_task_attempt(
-                ctx.session,
-                task_execution_id=ctx.task_execution_id,
-                tenant_id=task.tenant_id,  # type: ignore[union-attr]
-                attempt_number=decision.attempt_number,
-                status_before=TaskStatus.RETRYING,
-                status_after=TaskStatus.RETRYING,
-                error_detail=ctx.error_detail,
-                dispatch_result=TaskDispatchResult.DISPATCHED,
-            )
+            # The broker send is complete, but result.error is not a durable
+            # marker. Commit the existing PENDING audit row first; a retry of
+            # this method repairs that row without sending to the broker again.
+            ctx.attempt.dispatch_completed = True
+            if ctx.attempt.pending_attempt is not None:
+                ctx.attempt.pending_attempt.dispatch_result = TaskDispatchResult.DISPATCHED
+                await ctx.session.flush()
+            else:
+                await mark_task_attempt_dispatched(
+                    ctx.session,
+                    task_execution_id=ctx.task_execution_id,
+                    attempt_number=ctx.attempt.attempt_number or decision.attempt_number,
+                )
             await ctx.session.commit()
+            ctx.result.error = NoResultError()
             return decision.status, decision.status_msg
 
         status = TaskStatus.FAILED
@@ -345,6 +346,16 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         )
         await ctx.session.commit()
         return status, status_msg
+
+    async def _recover_dispatch_audit(self, ctx: _ErrorContext, decision: _RetryDecision) -> None:
+        """Repair dispatch audit state after the broker send preceded a DB failure."""
+        await mark_task_attempt_dispatched(
+            ctx.session,
+            task_execution_id=ctx.task_execution_id,
+            attempt_number=ctx.attempt.attempt_number or decision.attempt_number,
+        )
+        await ctx.session.commit()
+        ctx.result.error = NoResultError()
 
     async def _requeue(self, message: TaskiqMessage) -> bool:
         """Re-enqueue the message for a retry attempt under the same task_id."""

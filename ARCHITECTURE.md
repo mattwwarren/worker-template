@@ -143,7 +143,7 @@ and requires both non-empty, matching tenant and task allowlists; an empty
 allowlist denies automatic retries. Shadow mode records intended retries as
 nonterminal `RETRYING` rows without dispatching them, leaving an explicit
 operator recovery point. Every retry decision and dispatch outcome is also
-written to the append-only `task_attempt` audit table. If the re-kick itself
+written to the `task_attempt` audit table. If the re-kick itself
 fails to send, the row is reconciled to `FAILED` ("Task failed (retry dispatch
 error)") in the same `on_error` call. On successful dispatch, `on_error` marks
 `result.error` with TaskIQ's `NoResultError` sentinel; `post_execute` checks

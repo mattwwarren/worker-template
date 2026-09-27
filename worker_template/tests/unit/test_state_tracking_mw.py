@@ -220,7 +220,7 @@ class TestStateTrackingOnError:
             )
             mock_kicker.with_task_id.assert_called_once_with(msg.task_id)
             mock_kicker.kiq.assert_awaited_once_with(*msg.args, **msg.kwargs)
-            assert mock_audit.await_count == 2
+            assert mock_audit.await_count == 1
             assert isinstance(result.error, NoResultError)
 
     async def test_shadow_mode_records_without_requeue(self, middleware, monkeypatch):
@@ -314,7 +314,7 @@ class TestStateTrackingOnError:
             error_detail="RuntimeError: crash",
             status_message="Retrying (2/3)",
         )
-        assert mock_audit.await_count == 2
+        assert mock_audit.await_count == 1
         assert isinstance(result.error, NoResultError)
 
     async def test_fails_when_existing_retrying_task_reaches_max_retries(self, middleware):
@@ -598,6 +598,68 @@ class TestStateTrackingRetryBehavior:
 
             assert mock_maker.call_count == 2
             mock_session.commit.assert_called_once()
+
+    async def test_on_error_repairs_dispatch_audit_after_commit_failure(self, middleware, monkeypatch):
+        task_exec_id = uuid4()
+        tenant_id = uuid4()
+        msg = make_message(labels={"task_execution_id": str(task_exec_id)})
+        result = make_result(is_err=True)
+        exc = RuntimeError("crash")
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_enabled", True)
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_shadow_mode", False)
+        mock_task = MagicMock(
+            status=TaskStatus.RUNNING,
+            retry_count=0,
+            max_retries=3,
+            tenant_id=tenant_id,
+        )
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_tenant_allowlist", str(tenant_id))
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_task_allowlist", msg.task_name)
+
+        async def update_status(_session, _task_id, status, **kwargs):
+            mock_task.status = status
+            mock_task.status_message = kwargs["status_message"]
+            if status == TaskStatus.RETRYING:
+                mock_task.retry_count += 1
+
+        pending_attempt = MagicMock()
+        mock_session, mock_ctx = make_mock_session()
+        mock_maker = MagicMock(return_value=mock_ctx)
+        mock_session.commit.side_effect = [
+            None,
+            OperationalError("commit", {}, Exception("connection lost")),
+            None,
+            None,
+        ]
+
+        with (
+            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.middleware.state_tracking.get_task_execution", return_value=mock_task),
+            patch(
+                "worker_template.middleware.state_tracking.update_task_status",
+                side_effect=update_status,
+            ),
+            patch(
+                "worker_template.middleware.state_tracking.record_task_attempt",
+                return_value=pending_attempt,
+            ),
+            patch("worker_template.middleware.state_tracking.mark_task_attempt_dispatched") as mock_mark,
+            patch("worker_template.middleware.state_tracking.AsyncKicker") as mock_kicker_cls,
+        ):
+            mock_kicker = mock_kicker_cls.return_value
+            mock_kicker.with_task_id.return_value = mock_kicker
+            mock_kicker.kiq = AsyncMock()
+
+            await middleware.on_error(msg, result, exc)
+
+        mock_kicker.kiq.assert_awaited_once()
+        mock_mark.assert_awaited_once_with(
+            mock_session,
+            task_execution_id=task_exec_id,
+            attempt_number=1,
+        )
+        assert mock_session.commit.call_count == 4
+        assert isinstance(result.error, NoResultError)
 
     async def test_on_error_does_not_increment_retry_count_after_commit_takes_effect(self, middleware):
         # The retry gate is closed and shadow mode is on by default (see
