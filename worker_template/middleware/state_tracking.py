@@ -10,9 +10,12 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from taskiq import TaskiqMessage, TaskiqMiddleware, TaskiqResult
+from taskiq import NoResultError, TaskiqMessage, TaskiqMiddleware, TaskiqResult
+from taskiq.kicker import AsyncKicker
 
+from worker_template.core.config import settings
 from worker_template.db.session import async_session_maker
+from worker_template.models.task_attempt import TaskDispatchResult
 from worker_template.models.task_execution import TaskStatus
 from worker_template.realtime.contracts import (
     TASK_COMPLETED,
@@ -23,12 +26,14 @@ from worker_template.realtime.contracts import (
     TaskStatusEvent,
 )
 from worker_template.realtime.emitter import emit_task_event
+from worker_template.services.task_attempt_service import record_task_attempt
 from worker_template.services.task_execution_service import get_task_execution, update_task_status
 
 LOGGER = logging.getLogger(__name__)
 
 _TASK_EXECUTION_ID_KEY = "task_execution_id"
 RAW_INPUT_KEY = "raw_input"
+_SHADOW_RETRY_MARKER = "_state_tracking_shadow_retry"
 
 
 class StateTrackingMiddleware(TaskiqMiddleware):
@@ -59,6 +64,13 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         """Set task status to COMPLETED or FAILED based on result."""
         task_execution_id = self._extract_task_execution_id(message)
         if task_execution_id is None:
+            return
+
+        if isinstance(result.error, NoResultError):
+            # on_error already dispatched a retry and owns this message's outcome.
+            return
+        if result.__dict__.get(_SHADOW_RETRY_MARKER, False):
+            # on_error recorded a shadowed retry and owns this message's outcome.
             return
 
         async with async_session_maker() as session:
@@ -98,28 +110,133 @@ class StateTrackingMiddleware(TaskiqMiddleware):
 
         status = TaskStatus.FAILED
         status_msg = "Task failed (max retries exceeded)"
+        error_detail = f"{type(exception).__name__}: {exception}"
 
         async with async_session_maker() as session:
             # Check if we should retry
             task = await get_task_execution(session, task_execution_id)
-            if task is not None and task.retry_count < task.max_retries:
-                status = TaskStatus.RETRYING
-                status_msg = f"Retrying ({task.retry_count + 1}/{task.max_retries})"
+            should_retry = task is not None and task.retry_count < task.max_retries
+            retry_allowed = (
+                should_retry and task is not None and self._retry_gate_allows(message.task_name, task.tenant_id)
+            )
+            retry_shadowed = should_retry and not retry_allowed and settings.task_retry_shadow_mode
+            status_before = task.status if task is not None else TaskStatus.RUNNING
+            attempt_number = task.retry_count + 1 if task is not None else 1
+            if should_retry:
+                if retry_allowed:
+                    status = TaskStatus.RETRYING
+                    status_msg = f"Retrying ({task.retry_count + 1}/{task.max_retries})"  # type: ignore[union-attr]
+                elif retry_shadowed:
+                    status = TaskStatus.RETRYING
+                    status_msg = "Retry shadowed (automatic retry disabled)"
+                else:
+                    status = TaskStatus.FAILED
+                    status_msg = "Task failed (automatic retry disabled)"
 
             await update_task_status(
                 session,
                 task_execution_id,
                 status,
-                error_detail=f"{type(exception).__name__}: {exception}",
+                error_detail=error_detail,
                 status_message=status_msg,
             )
+            if should_retry and not retry_allowed:
+                await record_task_attempt(
+                    session,
+                    task_execution_id=task_execution_id,
+                    tenant_id=task.tenant_id,  # type: ignore[union-attr]
+                    attempt_number=attempt_number,
+                    status_before=status_before,
+                    status_after=status,
+                    error_detail=error_detail,
+                    dispatch_result=(TaskDispatchResult.SHADOWED if retry_shadowed else TaskDispatchResult.BLOCKED),
+                )
+            elif retry_allowed:
+                await record_task_attempt(
+                    session,
+                    task_execution_id=task_execution_id,
+                    tenant_id=task.tenant_id,  # type: ignore[union-attr]
+                    attempt_number=attempt_number,
+                    status_before=status_before,
+                    status_after=TaskStatus.RETRYING,
+                    error_detail=error_detail,
+                    dispatch_result=TaskDispatchResult.PENDING,
+                )
             await session.commit()
+
+            if retry_allowed:
+                requeued = await self._requeue(message)
+                if requeued:
+                    await record_task_attempt(
+                        session,
+                        task_execution_id=task_execution_id,
+                        tenant_id=task.tenant_id,  # type: ignore[union-attr]
+                        attempt_number=attempt_number,
+                        status_before=TaskStatus.RETRYING,
+                        status_after=TaskStatus.RETRYING,
+                        error_detail=error_detail,
+                        dispatch_result=TaskDispatchResult.DISPATCHED,
+                    )
+                    await session.commit()
+                    result.error = NoResultError()
+                else:
+                    status = TaskStatus.FAILED
+                    status_msg = "Task failed (retry dispatch error)"
+                    await update_task_status(
+                        session,
+                        task_execution_id,
+                        status,
+                        error_detail=error_detail,
+                        status_message=status_msg,
+                    )
+                    await record_task_attempt(
+                        session,
+                        task_execution_id=task_execution_id,
+                        tenant_id=task.tenant_id,  # type: ignore[union-attr]
+                        attempt_number=attempt_number,
+                        status_before=TaskStatus.RETRYING,
+                        status_after=status,
+                        error_detail=error_detail,
+                        dispatch_result=TaskDispatchResult.DISPATCH_FAILED,
+                    )
+                    await session.commit()
+
+            if retry_shadowed:
+                result.__dict__[_SHADOW_RETRY_MARKER] = True
+
         await self._emit_status_event(
             message,
             status,
-            error_detail=f"{type(exception).__name__}: {exception}",
+            error_detail=error_detail,
             status_message=status_msg,
         )
+
+    async def _requeue(self, message: TaskiqMessage) -> bool:
+        """Re-enqueue the message for a retry attempt under the same task_id."""
+        try:
+            kicker: AsyncKicker[Any, Any] = AsyncKicker(
+                task_name=message.task_name,
+                broker=self.broker,
+                labels=dict(message.labels),
+            ).with_task_id(message.task_id)
+            await kicker.kiq(*message.args, **message.kwargs)
+        except Exception:
+            LOGGER.warning("task_requeue_error", extra={"task_name": message.task_name}, exc_info=True)
+            return False
+        return True
+
+    def _retry_gate_allows(self, task_name: str, tenant_id: UUID) -> bool:
+        """Return whether automatic retries are enabled for this task and tenant."""
+        if not settings.task_retry_enabled:
+            return False
+
+        tenant_allowlist = {
+            value.strip() for value in settings.task_retry_tenant_allowlist.split(",") if value.strip()
+        }
+        task_allowlist = {value.strip() for value in settings.task_retry_task_allowlist.split(",") if value.strip()}
+        if not tenant_allowlist or not task_allowlist:
+            return False
+        return str(tenant_id) in tenant_allowlist and task_name in task_allowlist
 
     async def _emit_status_event(
         self,
