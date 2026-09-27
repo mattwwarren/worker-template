@@ -24,10 +24,10 @@ pr:
   tool: gh
   auto_create: false
   branch_pattern: "{type}/{plan_id}"
-  # No CI workflow and no branch protection yet: gh pr merge --auto would merge
-  # instantly, before any check runs. Flip to true once ci.yml + required
-  # status checks on main exist.
-  auto_merge: false
+  # main requires 7 status checks (Pre-commit checks, Lint, Type Check, Unit
+  # Tests, Integration Tests, Coverage Check, Validate (default)) before
+  # merge, so arming auto-merge is safe.
+  auto_merge: true
 
 plan_exit:
   mode: suggest
