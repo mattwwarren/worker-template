@@ -2,7 +2,7 @@
 name = "worker-template"
 version = "0.1.0"
 description = "A TaskIQ async worker service template"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.14,<3.15"
 dependencies = [
     "taskiq>=0.12.4",
     "taskiq-aio-pika>=0.6.0",
@@ -40,7 +40,7 @@ build-backend = "hatchling.build"
 
 [tool.ruff]
 line-length = 119
-target-version = "py313"
+target-version = "py314"
 extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
@@ -61,7 +61,7 @@ ignore = [
 "alembic/**" = ["ANN"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 strict = true
 warn_return_any = true
 warn_unused_configs = true

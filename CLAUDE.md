@@ -4,7 +4,7 @@ Claude Code configuration for TaskIQ async worker development.
 
 ## Tech Stack
 
-- **Language**: Python 3.13+
+- **Language**: Python 3.14+
 - **Task Framework**: TaskIQ with AioPikaBroker (RabbitMQ)
 - **Result Backend**: Redis (taskiq-redis)
 - **Database**: PostgreSQL with SQLAlchemy/SQLModel (async)
