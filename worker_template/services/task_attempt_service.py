@@ -36,6 +36,46 @@ async def record_task_attempt(
     return attempt
 
 
+async def get_task_attempt_dispatch_state(
+    session: AsyncSession,
+    *,
+    task_execution_id: UUID,
+    attempt_number: int,
+) -> TaskAttempt | None:
+    """Load an attempt whose dispatch state can be recovered after a DB failure."""
+    stmt = (
+        select(TaskAttempt)
+        .where(
+            col(TaskAttempt.task_execution_id) == task_execution_id,
+            col(TaskAttempt.attempt_number) == attempt_number,
+            col(TaskAttempt.dispatch_result).in_((TaskDispatchResult.PENDING, TaskDispatchResult.DISPATCHED)),
+        )
+        .order_by(col(TaskAttempt.created_at).desc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def get_latest_pending_task_attempt(
+    session: AsyncSession,
+    *,
+    task_execution_id: UUID,
+) -> TaskAttempt | None:
+    """Load the latest unresolved dispatch for restart-safe reconciliation."""
+    stmt = (
+        select(TaskAttempt)
+        .where(
+            col(TaskAttempt.task_execution_id) == task_execution_id,
+            col(TaskAttempt.dispatch_result) == TaskDispatchResult.PENDING,
+        )
+        .order_by(col(TaskAttempt.created_at).desc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
 async def mark_task_attempt_dispatched(
     session: AsyncSession,
     *,

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 from taskiq import NoResultError, TaskiqMessage, TaskiqMiddleware, TaskiqResult
 from taskiq.kicker import AsyncKicker
@@ -18,7 +19,7 @@ from taskiq.kicker import AsyncKicker
 from worker_template.core.config import settings
 from worker_template.db.retry import db_retry
 from worker_template.db.session import async_session_maker
-from worker_template.models.task_attempt import TaskAttempt, TaskDispatchResult
+from worker_template.models.task_attempt import TaskDispatchResult
 from worker_template.models.task_execution import TaskExecution, TaskStatus
 from worker_template.realtime.contracts import (
     TASK_COMPLETED,
@@ -29,7 +30,12 @@ from worker_template.realtime.contracts import (
     TaskStatusEvent,
 )
 from worker_template.realtime.emitter import emit_task_event
-from worker_template.services.task_attempt_service import mark_task_attempt_dispatched, record_task_attempt
+from worker_template.services.task_attempt_service import (
+    get_latest_pending_task_attempt,
+    get_task_attempt_dispatch_state,
+    mark_task_attempt_dispatched,
+    record_task_attempt,
+)
 from worker_template.services.task_execution_service import get_task_execution, update_task_status
 
 LOGGER = logging.getLogger(__name__)
@@ -37,6 +43,17 @@ LOGGER = logging.getLogger(__name__)
 _TASK_EXECUTION_ID_KEY = "task_execution_id"
 RAW_INPUT_KEY = "raw_input"
 _SHADOW_RETRY_MARKER = "_state_tracking_shadow_retry"
+_MISSING_RETRY_AUDIT_DETAIL = "missing retry audit row"
+_RECOVERY_AUDIT_NOT_FOUND = "retry recovery found no matching audit row"
+_RECONCILIATION_AUDIT_NOT_FOUND = "retry dispatch reconciliation found no matching audit row"
+_DISPATCH_AUDIT_NOT_FOUND = "retry dispatch completed but its audit row was not found"
+_RECOVERED_AUDIT_NOT_FOUND = "retry dispatch recovery found no matching audit row"
+
+
+def _missing_retry_audit_error(message: str) -> OperationalError:
+    """Create a retryable error for an unresolvable dispatch audit."""
+    detail = _MISSING_RETRY_AUDIT_DETAIL
+    return OperationalError(message, {}, RuntimeError(detail))
 
 
 @dataclass
@@ -46,8 +63,6 @@ class _OnErrorAttempt:
     recorded_status: TaskStatus | None = None
     recorded_retry_count: int | None = None
     status_message: str | None = None
-    pending_attempt: TaskAttempt | None = None
-    dispatch_completed: bool = False
     attempt_number: int | None = None
 
 
@@ -189,15 +204,39 @@ class StateTrackingMiddleware(TaskiqMiddleware):
             decision = self._resolve_retry_decision(ctx)
             status, status_msg = decision.status, decision.status_msg
 
-            if not decision.retry_already_recorded:
-                await self._record_initial_error_status(ctx, decision)
-            await session.commit()
-
             if decision.retry_allowed:
-                if attempt.dispatch_completed:
-                    await self._recover_dispatch_audit(ctx, decision)
+                if decision.retry_already_recorded:
+                    recovered_attempt = await get_task_attempt_dispatch_state(
+                        session,
+                        task_execution_id=task_execution_id,
+                        attempt_number=attempt.attempt_number or decision.attempt_number,
+                    )
+                    if recovered_attempt is not None:
+                        await self._recover_dispatch_audit(ctx, recovered_attempt.attempt_number)
+                    else:
+                        raise _missing_retry_audit_error(_RECOVERY_AUDIT_NOT_FOUND)
                 else:
+                    pending_attempt = await get_latest_pending_task_attempt(
+                        session,
+                        task_execution_id=task_execution_id,
+                    )
+                    if pending_attempt is not None:
+                        marked = await mark_task_attempt_dispatched(
+                            session,
+                            task_execution_id=task_execution_id,
+                            attempt_number=pending_attempt.attempt_number,
+                        )
+                        if not marked:
+                            raise _missing_retry_audit_error(
+                                _RECONCILIATION_AUDIT_NOT_FOUND
+                            )
+                    await self._record_initial_error_status(ctx, decision)
+                    await session.commit()
                     status, status_msg = await self._dispatch_retry(ctx, decision)
+            else:
+                if not decision.retry_already_recorded:
+                    await self._record_initial_error_status(ctx, decision)
+                await session.commit()
 
             if decision.retry_shadowed:
                 result.__dict__[_SHADOW_RETRY_MARKER] = True
@@ -290,7 +329,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
             )
         elif decision.retry_allowed:
             attempt.attempt_number = decision.attempt_number
-            attempt.pending_attempt = await record_task_attempt(
+            await record_task_attempt(
                 ctx.session,
                 task_execution_id=ctx.task_execution_id,
                 tenant_id=task.tenant_id,  # type: ignore[union-attr]
@@ -306,19 +345,13 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         task = ctx.task
         requeued = await self._requeue(ctx.message)
         if requeued:
-            # The broker send is complete, but result.error is not a durable
-            # marker. Commit the existing PENDING audit row first; a retry of
-            # this method repairs that row without sending to the broker again.
-            ctx.attempt.dispatch_completed = True
-            if ctx.attempt.pending_attempt is not None:
-                ctx.attempt.pending_attempt.dispatch_result = TaskDispatchResult.DISPATCHED
-                await ctx.session.flush()
-            else:
-                await mark_task_attempt_dispatched(
-                    ctx.session,
-                    task_execution_id=ctx.task_execution_id,
-                    attempt_number=ctx.attempt.attempt_number or decision.attempt_number,
-                )
+            marked = await mark_task_attempt_dispatched(
+                ctx.session,
+                task_execution_id=ctx.task_execution_id,
+                attempt_number=ctx.attempt.attempt_number or decision.attempt_number,
+            )
+            if not marked:
+                raise _missing_retry_audit_error(_DISPATCH_AUDIT_NOT_FOUND)
             await ctx.session.commit()
             ctx.result.error = NoResultError()
             return decision.status, decision.status_msg
@@ -347,13 +380,15 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         await ctx.session.commit()
         return status, status_msg
 
-    async def _recover_dispatch_audit(self, ctx: _ErrorContext, decision: _RetryDecision) -> None:
+    async def _recover_dispatch_audit(self, ctx: _ErrorContext, attempt_number: int) -> None:
         """Repair dispatch audit state after the broker send preceded a DB failure."""
-        await mark_task_attempt_dispatched(
+        marked = await mark_task_attempt_dispatched(
             ctx.session,
             task_execution_id=ctx.task_execution_id,
-            attempt_number=ctx.attempt.attempt_number or decision.attempt_number,
+            attempt_number=attempt_number,
         )
+        if not marked:
+            raise _missing_retry_audit_error(_RECOVERED_AUDIT_NOT_FOUND)
         await ctx.session.commit()
         ctx.result.error = NoResultError()
 

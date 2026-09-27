@@ -36,6 +36,9 @@ def make_result(is_err=False, error=None):
 def make_mock_session():
     """Create a mock async session that supports async context manager."""
     mock_session = AsyncMock()
+    mock_query_result = MagicMock()
+    mock_query_result.scalar_one_or_none.return_value = None
+    mock_session.execute.return_value = mock_query_result
     mock_ctx = AsyncMock()
     mock_ctx.__aenter__ = AsyncMock(return_value=mock_session)
     mock_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -196,6 +199,10 @@ class TestStateTrackingOnError:
             patch("worker_template.middleware.state_tracking.get_task_execution", return_value=mock_task),
             patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
             patch("worker_template.middleware.state_tracking.record_task_attempt") as mock_audit,
+            patch(
+                "worker_template.middleware.state_tracking.mark_task_attempt_dispatched",
+                return_value=True,
+            ),
             patch("worker_template.middleware.state_tracking.AsyncKicker") as mock_kicker_cls,
         ):
             mock_kicker = mock_kicker_cls.return_value
@@ -246,6 +253,10 @@ class TestStateTrackingOnError:
             patch("worker_template.middleware.state_tracking.get_task_execution", return_value=mock_task),
             patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
             patch("worker_template.middleware.state_tracking.record_task_attempt") as mock_audit,
+            patch(
+                "worker_template.middleware.state_tracking.mark_task_attempt_dispatched",
+                return_value=True,
+            ),
             patch("worker_template.middleware.state_tracking.AsyncKicker") as mock_kicker_cls,
         ):
             await middleware.on_error(msg, result, exc)
@@ -298,6 +309,10 @@ class TestStateTrackingOnError:
                 side_effect=update_status,
             ) as mock_update,
             patch("worker_template.middleware.state_tracking.record_task_attempt") as mock_audit,
+            patch(
+                "worker_template.middleware.state_tracking.mark_task_attempt_dispatched",
+                return_value=True,
+            ),
             patch("worker_template.middleware.state_tracking.AsyncKicker") as mock_kicker_cls,
         ):
             mock_kicker = mock_kicker_cls.return_value
@@ -625,6 +640,12 @@ class TestStateTrackingRetryBehavior:
         pending_attempt = MagicMock()
         mock_session, mock_ctx = make_mock_session()
         mock_maker = MagicMock(return_value=mock_ctx)
+        recovered_query_result = MagicMock()
+        recovered_query_result.scalar_one_or_none.return_value = pending_attempt
+        mock_session.execute.side_effect = [
+            mock_session.execute.return_value,
+            recovered_query_result,
+        ]
         mock_session.commit.side_effect = [
             None,
             OperationalError("commit", {}, Exception("connection lost")),
@@ -653,12 +674,13 @@ class TestStateTrackingRetryBehavior:
             await middleware.on_error(msg, result, exc)
 
         mock_kicker.kiq.assert_awaited_once()
-        mock_mark.assert_awaited_once_with(
+        assert mock_mark.await_count == 2
+        mock_mark.assert_any_await(
             mock_session,
             task_execution_id=task_exec_id,
             attempt_number=1,
         )
-        assert mock_session.commit.call_count == 4
+        assert mock_session.commit.call_count == 3
         assert isinstance(result.error, NoResultError)
 
     async def test_on_error_does_not_increment_retry_count_after_commit_takes_effect(self, middleware):
