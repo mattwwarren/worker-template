@@ -327,7 +327,7 @@ class TestStateTrackingRetryBehavior:
     async def test_pre_execute_raises_after_max_attempts(self, middleware):
         task_exec_id = uuid4()
         msg = make_message(labels={"task_execution_id": str(task_exec_id)})
-        mock_session, mock_ctx = make_mock_session()
+        _mock_session, mock_ctx = make_mock_session()
         mock_maker = MagicMock(return_value=mock_ctx)
 
         with (
@@ -344,7 +344,7 @@ class TestStateTrackingRetryBehavior:
     async def test_pre_execute_does_not_retry_non_operational_error(self, middleware):
         task_exec_id = uuid4()
         msg = make_message(labels={"task_execution_id": str(task_exec_id)})
-        mock_session, mock_ctx = make_mock_session()
+        _mock_session, mock_ctx = make_mock_session()
         mock_maker = MagicMock(return_value=mock_ctx)
 
         with (

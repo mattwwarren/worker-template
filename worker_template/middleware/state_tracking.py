@@ -12,6 +12,7 @@ from uuid import UUID
 
 from taskiq import TaskiqMessage, TaskiqMiddleware, TaskiqResult
 
+from worker_template.db.retry import db_retry
 from worker_template.db.session import async_session_maker
 from worker_template.models.task_execution import TaskStatus
 from worker_template.realtime.contracts import (
@@ -38,6 +39,10 @@ class StateTrackingMiddleware(TaskiqMiddleware):
     persistence independent of the task's transaction.
     """
 
+    # @db_retry wraps the whole method, not just the DB block, so each retry
+    # attempt opens a fresh session rather than reusing one left in a bad
+    # state by the failed commit.
+    @db_retry
     async def pre_execute(self, message: TaskiqMessage) -> TaskiqMessage:
         """Set task status to RUNNING."""
         task_execution_id = self._extract_task_execution_id(message)
@@ -55,6 +60,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         await self._emit_status_event(message, TaskStatus.RUNNING, status_message="Task started")
         return message
 
+    @db_retry
     async def post_execute(self, message: TaskiqMessage, result: TaskiqResult[Any]) -> None:
         """Set task status to COMPLETED or FAILED based on result."""
         task_execution_id = self._extract_task_execution_id(message)
@@ -85,6 +91,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         else:
             await self._emit_status_event(message, TaskStatus.COMPLETED, status_message="Task completed successfully")
 
+    @db_retry
     async def on_error(
         self,
         message: TaskiqMessage,
