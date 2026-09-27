@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "A TaskIQ async worker service template"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "taskiq>=0.12.4",
+    # Why: capped below 0.13.0 pending the deferred taskiq 0.13.0 evaluation tracked in issue #25.
+    "taskiq>=0.12.4,<0.13.0",
     "taskiq-aio-pika>=0.6.0",
     "taskiq-redis>=1.2.3",
     "sqlmodel>=0.0.39",
