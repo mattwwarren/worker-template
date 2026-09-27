@@ -10,7 +10,8 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from taskiq import TaskiqMessage, TaskiqMiddleware, TaskiqResult
+from taskiq import NoResultError, TaskiqMessage, TaskiqMiddleware, TaskiqResult
+from taskiq.kicker import AsyncKicker
 
 from worker_template.db.session import async_session_maker
 from worker_template.models.task_execution import TaskStatus
@@ -61,6 +62,10 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         if task_execution_id is None:
             return
 
+        if isinstance(result.error, NoResultError):
+            # on_error already dispatched a retry and owns this message's outcome.
+            return
+
         async with async_session_maker() as session:
             if result.is_err:
                 await update_task_status(
@@ -98,28 +103,61 @@ class StateTrackingMiddleware(TaskiqMiddleware):
 
         status = TaskStatus.FAILED
         status_msg = "Task failed (max retries exceeded)"
+        error_detail = f"{type(exception).__name__}: {exception}"
 
         async with async_session_maker() as session:
             # Check if we should retry
             task = await get_task_execution(session, task_execution_id)
-            if task is not None and task.retry_count < task.max_retries:
+            should_retry = task is not None and task.retry_count < task.max_retries
+            if should_retry:
                 status = TaskStatus.RETRYING
-                status_msg = f"Retrying ({task.retry_count + 1}/{task.max_retries})"
+                status_msg = f"Retrying ({task.retry_count + 1}/{task.max_retries})"  # type: ignore[union-attr]
 
             await update_task_status(
                 session,
                 task_execution_id,
                 status,
-                error_detail=f"{type(exception).__name__}: {exception}",
+                error_detail=error_detail,
                 status_message=status_msg,
             )
             await session.commit()
+
+            if should_retry:
+                requeued = await self._requeue(message)
+                if requeued:
+                    result.error = NoResultError()
+                else:
+                    status = TaskStatus.FAILED
+                    status_msg = "Task failed (retry dispatch error)"
+                    await update_task_status(
+                        session,
+                        task_execution_id,
+                        status,
+                        error_detail=error_detail,
+                        status_message=status_msg,
+                    )
+                    await session.commit()
+
         await self._emit_status_event(
             message,
             status,
-            error_detail=f"{type(exception).__name__}: {exception}",
+            error_detail=error_detail,
             status_message=status_msg,
         )
+
+    async def _requeue(self, message: TaskiqMessage) -> bool:
+        """Re-enqueue the message for a retry attempt under the same task_id."""
+        try:
+            kicker: AsyncKicker[Any, Any] = AsyncKicker(
+                task_name=message.task_name,
+                broker=self.broker,
+                labels=dict(message.labels),
+            ).with_task_id(message.task_id)
+            await kicker.kiq(*message.args, **message.kwargs)
+        except Exception:
+            LOGGER.warning("task_requeue_error", extra={"task_name": message.task_name}, exc_info=True)
+            return False
+        return True
 
     async def _emit_status_event(
         self,
