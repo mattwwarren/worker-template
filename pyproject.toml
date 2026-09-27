@@ -83,7 +83,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["worker_template/tests"]
-addopts = "--tb=short -n auto --cov=worker_template --cov-fail-under=60"
+addopts = "--tb=short -n auto --cov=worker_template --cov-fail-under=90"
 markers = [
     "integration: marks tests as integration tests (require Docker services)",
 ]
@@ -91,9 +91,6 @@ markers = [
 [tool.coverage.run]
 omit = [
     "worker_template/tests/*",
-    "worker_template/worker.py",
-    "worker_template/scheduler.py",
-    "worker_template/health_server.py",
 ]
 
 [tool.coverage.report]
