@@ -9,6 +9,8 @@ from taskiq import NoResultError
 from worker_template.middleware.state_tracking import StateTrackingMiddleware
 from worker_template.models.task_execution import TaskStatus
 
+_STATE_TRACKING_SETTINGS = "worker_template.middleware.state_tracking.settings"
+
 
 def make_message(task_name="test_task", labels=None, kwargs=None, args=None):
     """Create a mock TaskIQ message."""
@@ -165,8 +167,8 @@ class TestStateTrackingPostExecute:
 class TestStateTrackingOnError:
     @pytest.fixture
     def middleware(self, monkeypatch):
-        monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_enabled", True)
-        monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_shadow_mode", False)
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_enabled", True)
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_shadow_mode", False)
         return StateTrackingMiddleware()
 
     async def test_sets_retrying_when_retries_available(self, middleware, monkeypatch):
@@ -181,12 +183,8 @@ class TestStateTrackingOnError:
         mock_task.max_retries = 3
         mock_task.status = TaskStatus.RUNNING
         mock_task.tenant_id = tenant_id
-        monkeypatch.setattr(
-            "worker_template.middleware.state_tracking.settings.task_retry_tenant_allowlist", str(tenant_id)
-        )
-        monkeypatch.setattr(
-            "worker_template.middleware.state_tracking.settings.task_retry_task_allowlist", msg.task_name
-        )
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_tenant_allowlist", str(tenant_id))
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_task_allowlist", msg.task_name)
 
         mock_session, mock_ctx = make_mock_session()
         mock_maker = MagicMock(return_value=mock_ctx)
@@ -224,8 +222,8 @@ class TestStateTrackingOnError:
             assert isinstance(result.error, NoResultError)
 
     async def test_shadow_mode_records_without_requeue(self, middleware, monkeypatch):
-        monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_enabled", False)
-        monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_shadow_mode", True)
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_enabled", False)
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_shadow_mode", True)
         task_exec_id = uuid4()
         tenant_id = uuid4()
         msg = make_message(labels={"task_execution_id": str(task_exec_id)})
@@ -342,12 +340,8 @@ class TestStateTrackingOnError:
         mock_task.max_retries = 3
         mock_task.status = TaskStatus.RUNNING
         mock_task.tenant_id = tenant_id
-        monkeypatch.setattr(
-            "worker_template.middleware.state_tracking.settings.task_retry_tenant_allowlist", str(tenant_id)
-        )
-        monkeypatch.setattr(
-            "worker_template.middleware.state_tracking.settings.task_retry_task_allowlist", msg.task_name
-        )
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_tenant_allowlist", str(tenant_id))
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_task_allowlist", msg.task_name)
 
         mock_session, mock_ctx = make_mock_session()
         mock_maker = MagicMock(return_value=mock_ctx)

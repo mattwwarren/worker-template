@@ -19,6 +19,7 @@ from worker_template.services.task_execution_service import (
 )
 
 _ATTEMPT_COUNTS: dict[str, int] = {}
+_STATE_TRACKING_SETTINGS = "worker_template.middleware.state_tracking.settings"
 
 
 @broker.task
@@ -48,8 +49,8 @@ async def retry_broker(
 ) -> Any:
     """Point StateTrackingMiddleware at the test DB and run retries synchronously."""
     monkeypatch.setattr("worker_template.middleware.state_tracking.async_session_maker", session_maker)
-    monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_enabled", True)
-    monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_shadow_mode", False)
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_enabled", True)
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_shadow_mode", False)
     if not any(isinstance(mw, StateTrackingMiddleware) for mw in test_broker.middlewares):
         register_middleware(test_broker)
     original_await_inplace = test_broker.await_inplace
@@ -244,13 +245,8 @@ async def test_flaky_task_retries_until_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tenant_id = uuid4()
-    monkeypatch.setattr(
-        "worker_template.middleware.state_tracking.settings.task_retry_tenant_allowlist", str(tenant_id)
-    )
-    monkeypatch.setattr(
-        "worker_template.middleware.state_tracking.settings.task_retry_task_allowlist",
-        _flaky_retry_task.task_name,
-    )
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_tenant_allowlist", str(tenant_id))
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_task_allowlist", _flaky_retry_task.task_name)
     task = await create_task_execution(
         session,
         task_name="_flaky_retry_task",
@@ -284,13 +280,8 @@ async def test_always_failing_task_exhausts_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tenant_id = uuid4()
-    monkeypatch.setattr(
-        "worker_template.middleware.state_tracking.settings.task_retry_tenant_allowlist", str(tenant_id)
-    )
-    monkeypatch.setattr(
-        "worker_template.middleware.state_tracking.settings.task_retry_task_allowlist",
-        _always_failing_task.task_name,
-    )
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_tenant_allowlist", str(tenant_id))
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_task_allowlist", _always_failing_task.task_name)
     task = await create_task_execution(
         session,
         task_name="_always_failing_task",
@@ -321,14 +312,10 @@ async def test_shadowed_retry_remains_retrying_through_receiver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tenant_id = uuid4()
-    monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_enabled", False)
-    monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_shadow_mode", True)
-    monkeypatch.setattr(
-        "worker_template.middleware.state_tracking.settings.task_retry_tenant_allowlist", str(tenant_id)
-    )
-    monkeypatch.setattr(
-        "worker_template.middleware.state_tracking.settings.task_retry_task_allowlist", "_always_failing_task"
-    )
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_enabled", False)
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_shadow_mode", True)
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_tenant_allowlist", str(tenant_id))
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_task_allowlist", "_always_failing_task")
     task = await create_task_execution(
         session,
         task_name="_always_failing_task",
