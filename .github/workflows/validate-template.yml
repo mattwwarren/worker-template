@@ -1,0 +1,90 @@
+# validate-template.yml - Validate template generation
+#
+# Templatizes the runnable project, generates a project from it with Copier,
+# and checks the generated project passes its own pre-commit, lint,
+# type-check, and Docker build.
+#
+# Runs on:
+# - Push to main (when template-related files change)
+# - Pull requests to main
+
+name: Validate Template
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'copier.yaml'
+      - '_tasks.py'
+      - 'scripts/templatize.sh'
+      - 'worker_template/**'
+      - 'pyproject.toml'
+      - 'Dockerfile'
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Single entry until #12 wires multi_tenant/enable_scheduler/database_enabled
+        # to generation output - expand this matrix then.
+        include:
+          - name: default
+            data_args: ""
+
+    name: Validate (${{ matrix.name }})
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Run templatize script
+        run: |
+          chmod +x ./scripts/templatize.sh
+          ./scripts/templatize.sh .templatized
+
+      - name: Install Copier
+        run: pipx install copier
+
+      - name: Generate project (${{ matrix.name }})
+        run: |
+          copier copy .templatized /tmp/test-project \
+            --defaults --trust \
+            --data project_name="Test Project" \
+            ${{ matrix.data_args }}
+
+      - name: Install dependencies
+        run: cd /tmp/test-project && uv sync --extra dev
+
+      - name: Generated project passes its own pre-commit
+        run: |
+          cd /tmp/test-project
+          git init -q
+          git add -A
+          uv run pre-commit run --all-files
+
+      - name: Lint (ruff check)
+        run: |
+          cd /tmp/test-project
+          uv run ruff check .
+
+      - name: Type check (mypy)
+        run: cd /tmp/test-project && uv run mypy .
+
+      - name: Build Docker image
+        run: cd /tmp/test-project && docker build -t test:latest .
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Validation: ${{ matrix.name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Configuration: \`${{ matrix.data_args || 'defaults' }}\`" >> $GITHUB_STEP_SUMMARY

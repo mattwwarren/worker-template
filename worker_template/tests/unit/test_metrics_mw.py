@@ -1,5 +1,6 @@
 """Tests for MetricsMiddleware: pre_execute, post_execute, on_error."""
 
+import time
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
@@ -118,7 +119,11 @@ class TestMetricsMiddlewarePostExecute:
 
     async def test_records_duration_when_start_time_present(self, middleware):
         msg = make_message()
-        msg.labels[_TASK_START_TIME_KEY] = "1000.0"
+        # The middleware stamps start time with time.monotonic(), which has no
+        # fixed epoch (e.g. system uptime). A hardcoded value like "1000.0"
+        # would race against the actual monotonic clock and can go negative.
+        # Use a real monotonic reading from a moment ago instead.
+        msg.labels[_TASK_START_TIME_KEY] = str(time.monotonic() - 5)
         result = make_result(is_err=False)
 
         with patch("worker_template.middleware.metrics_mw.task_duration_seconds") as mock_hist:
