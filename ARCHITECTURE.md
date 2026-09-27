@@ -143,7 +143,7 @@ and requires both non-empty, matching tenant and task allowlists; an empty
 allowlist denies automatic retries. Shadow mode records intended retries as
 nonterminal `RETRYING` rows without dispatching them, leaving an explicit
 operator recovery point. Every retry decision and dispatch outcome is also
-written to the append-only `task_attempt` audit table. If the re-kick itself
+written to the `task_attempt` audit table. If the re-kick itself
 fails to send, the row is reconciled to `FAILED` ("Task failed (retry dispatch
 error)") in the same `on_error` call. On successful dispatch, `on_error` marks
 `result.error` with TaskIQ's `NoResultError` sentinel; `post_execute` checks
@@ -160,9 +160,9 @@ Two transaction boundaries exist by design, and they are independent:
 - **The task body owns its domain transaction.** Services flush; the task
   commits (same rule as the API template's "endpoints commit").
 - **StateTrackingMiddleware owns the TaskExecution row's transaction**, in
-  its own session, committed in every branch — so the recorded
-  RUNNING/FAILED status survives even when the task's own transaction rolls
-  back.
+  its own session, committed in every branch, with `@db_retry` retrying the
+  commit on transient `OperationalError` — so the recorded RUNNING/FAILED
+  status survives even when the task's own transaction rolls back.
 
 State transitions also emit realtime events (fire-and-forget) — see below.
 
@@ -170,15 +170,12 @@ State transitions also emit realtime events (fire-and-forget) — see below.
 > opt-in retry gate requiring both matching allowlists (with nonterminal shadow
 > mode) and re-enqueues via `AsyncKicker` when `task.retry_count <
 > task.max_retries`; each decision and dispatch outcome is recorded in
-> `task_attempt`; see above.
-> (2) `db/retry.py` (`@db_retry`, tenacity backoff for transient
-> `OperationalError`) exists and is tested but is not applied to any
-> production call site. (3) There is no idempotency-key pattern;
-> `parent_task_id` supports task trees, not dedup. (4)
+> `task_attempt`; see above. (2) There is no idempotency-key pattern;
+> `parent_task_id` supports task trees, not dedup. (3)
 > `create_task_execution` has no production call site — the shipped example
 > task doesn't thread a `task_execution_id`, so StateTrackingMiddleware
 > no-ops end-to-end for it; wiring row creation into dispatch is left to
-> the instance. Treat all four as instance-level decisions, not shipped
+> the instance. Treat all three as instance-level decisions, not shipped
 > behavior.
 
 ## Data layer

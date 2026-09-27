@@ -155,7 +155,8 @@ uv run pytest
   message is re-enqueued via `AsyncKicker` when both tenant/task allowlists
   permit; shadow mode records nonterminal intended retries and the append-only
   `task_attempt` audit table covers rollout and dispatch outcomes; `db_retry`
-  exists for transient DB failures but must be applied explicitly)
+  wraps StateTrackingMiddleware's own-session commits for transient DB
+  failures)
 
 ### Testing Patterns
 
