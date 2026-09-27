@@ -19,11 +19,12 @@ def make_message(task_name="test_task", labels=None, kwargs=None):
     return msg
 
 
-def make_result(is_err=False, error=None):
+def make_result(is_err=False, error=None, return_value=None):
     """Create a mock TaskIQ result."""
     result = MagicMock()
     result.is_err = is_err
     result.error = error
+    result.return_value = return_value if return_value is not None else {}
     return result
 
 
@@ -80,7 +81,7 @@ class TestStateTrackingPostExecute:
     async def test_sets_completed_on_success(self, middleware):
         task_exec_id = uuid4()
         msg = make_message(labels={"task_execution_id": str(task_exec_id)})
-        result = make_result(is_err=False)
+        result = make_result(is_err=False, return_value={"success": True, "result_url": "s3://results/out.pdf"})
         mock_session, mock_ctx = make_mock_session()
         mock_maker = MagicMock(return_value=mock_ctx)
 
@@ -95,6 +96,7 @@ class TestStateTrackingPostExecute:
                 task_exec_id,
                 TaskStatus.COMPLETED,
                 status_message="Task completed successfully",
+                result_url="s3://results/out.pdf",
             )
             mock_session.commit.assert_called_once()
 

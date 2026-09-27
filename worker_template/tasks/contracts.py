@@ -31,6 +31,7 @@ class TaskInput(BaseModel):
     tenant_id: UUID
     priority: int = Field(default=DEFAULT_PRIORITY, ge=MIN_PRIORITY, le=MAX_PRIORITY)
     parent_task_id: UUID | None = None
+    task_execution_id: UUID | None = None
 
 
 class TaskOutput(BaseModel):

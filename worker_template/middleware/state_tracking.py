@@ -12,7 +12,7 @@ from uuid import UUID
 
 from taskiq import TaskiqMessage, TaskiqMiddleware, TaskiqResult
 
-from worker_template.db.session import async_session_maker
+from worker_template.db import session as db_session
 from worker_template.models.task_execution import TaskStatus
 from worker_template.realtime.contracts import (
     TASK_COMPLETED,
@@ -44,7 +44,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         if task_execution_id is None:
             return message
 
-        async with async_session_maker() as session:
+        async with db_session.async_session_maker() as session:
             await update_task_status(
                 session,
                 task_execution_id,
@@ -61,7 +61,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         if task_execution_id is None:
             return
 
-        async with async_session_maker() as session:
+        async with db_session.async_session_maker() as session:
             if result.is_err:
                 await update_task_status(
                     session,
@@ -71,11 +71,13 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                     status_message="Task failed",
                 )
             else:
+                result_url = result.return_value.get("result_url") if isinstance(result.return_value, dict) else None
                 await update_task_status(
                     session,
                     task_execution_id,
                     TaskStatus.COMPLETED,
                     status_message="Task completed successfully",
+                    result_url=result_url,
                 )
             await session.commit()
         if result.is_err:
@@ -99,7 +101,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         status = TaskStatus.FAILED
         status_msg = "Task failed (max retries exceeded)"
 
-        async with async_session_maker() as session:
+        async with db_session.async_session_maker() as session:
             # Check if we should retry
             task = await get_task_execution(session, task_execution_id)
             if task is not None and task.retry_count < task.max_retries:

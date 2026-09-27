@@ -154,12 +154,15 @@ State transitions also emit realtime events (fire-and-forget) — see below.
 > is wired. (2) `db/retry.py` (`@db_retry`, tenacity backoff for transient
 > `OperationalError`) exists and is tested but is not applied to any
 > production call site. (3) There is no idempotency-key pattern;
-> `parent_task_id` supports task trees, not dedup. (4)
-> `create_task_execution` has no production call site — the shipped example
-> task doesn't thread a `task_execution_id`, so StateTrackingMiddleware
-> no-ops end-to-end for it; wiring row creation into dispatch is left to
-> the instance. Treat all four as instance-level decisions, not shipped
-> behavior.
+> `parent_task_id` supports task trees, not dedup. Treat all three as
+> instance-level decisions, not shipped behavior. (4)
+> `create_task_execution` now has a production call site:
+> `dispatch_example_task` (`tasks/example_task.py`) creates the row,
+> commits, then `.kiq(raw_input=...)` with `task_execution_id` threaded
+> into the input contract, so StateTrackingMiddleware picks it up
+> end-to-end. It is not a generic dispatcher — it is the pattern
+> instances should copy for their own tasks, one dispatch function per
+> task.
 
 ## Data layer
 

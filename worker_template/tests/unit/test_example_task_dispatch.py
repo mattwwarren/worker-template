@@ -3,7 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-from worker_template.tasks.example_task import dispatch_example_task
+from worker_template.tasks.example_task import dispatch_example_task, example_task
 
 
 def make_mock_session():
@@ -44,14 +44,14 @@ class TestDispatchExampleTask:
 
             mock_create.assert_awaited_once_with(
                 mock_session,
-                task_name="example_task",
+                task_name=example_task.task_name,
                 tenant_id=tenant_id,
             )
             mock_kiq.assert_awaited_once()
             _, kiq_kwargs = mock_kiq.call_args
             raw_input = kiq_kwargs["raw_input"]
-            assert raw_input["task_execution_id"] == str(task_execution_id)
-            assert raw_input["tenant_id"] == str(tenant_id)
+            assert raw_input["task_execution_id"] == task_execution_id
+            assert raw_input["tenant_id"] == tenant_id
             assert result == (stub_task_execution, mock_kicked_task)
 
     async def test_commits_before_kiq(self):
