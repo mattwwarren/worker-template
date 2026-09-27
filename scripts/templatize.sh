@@ -90,6 +90,7 @@ EXCLUDE_PATTERNS=(
     # cw session artifacts (not project template content)
     ".claude/cw-context.json*"
     ".claude/review-verdict.*"
+    ".cw"
 )
 
 # Build rsync exclude arguments
