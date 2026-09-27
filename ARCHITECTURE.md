@@ -180,7 +180,8 @@ Shared skeleton with fastapi-template, near line-for-line:
   `create_session_maker` factories and module-level singletons. Production
   code paths (worker startup, middleware) use `async_session_maker()`
   directly; the `get_session()` generator exists for parity but has no
-  production call site here.
+  production call site here. See §7 P1 for why psycopg never crosses into
+  application code.
 - Migrations are ORM-exclusive via Alembic autogenerate; `db/base.py` must
   import every model so `SQLModel.metadata` is complete.
 - `core/config.py` — same pydantic-settings pattern, extended with
@@ -252,13 +253,17 @@ guard that keeps the worker's copies in sync.
 
 ## Invariants (the short list)
 
+The fuller rationale behind these — the why, not just the what — lives in
+§7/§8 below; this list stays terse on purpose.
+
 1. Async-only, end to end.
 2. Tasks commit their own domain writes; services flush;
    StateTrackingMiddleware commits status in its own session.
 3. Task I/O is dict-at-the-boundary, Pydantic-validated inside the task
    (`tasks/contracts.py`).
 4. Every table extends `TimestampedTable`; every model is imported in
-   `db/base.py`; schema changes go through Alembic autogenerate.
+   `db/base.py`; schema changes go through Alembic autogenerate. *(see §7 P2,
+   §8 A1)*
 5. Tenancy travels in the task contract (`tenant_id` kwarg → ContextVar),
    never ambiently.
 6. Realtime is write-only from the worker, room-scoped per tenant, and can
