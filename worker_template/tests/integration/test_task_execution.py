@@ -1,10 +1,14 @@
 """Integration tests for TaskExecution service."""
 
+from typing import Any
 from uuid import uuid4
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from worker_template.broker import broker
+from worker_template.middleware import register_middleware
+from worker_template.middleware.state_tracking import StateTrackingMiddleware
 from worker_template.models.task_execution import TaskStatus
 from worker_template.services.task_execution_service import (
     create_task_execution,
@@ -13,6 +17,48 @@ from worker_template.services.task_execution_service import (
     list_task_executions,
     update_task_status,
 )
+
+_ATTEMPT_COUNTS: dict[str, int] = {}
+_STATE_TRACKING_SETTINGS = "worker_template.middleware.state_tracking.settings"
+
+
+@broker.task
+async def _flaky_retry_task(raw_input: dict[str, Any]) -> dict[str, Any]:
+    """Fail `fail_times` times for a given attempt_key, then succeed."""
+    attempt_key = raw_input["attempt_key"]
+    fail_times = raw_input["fail_times"]
+    _ATTEMPT_COUNTS[attempt_key] = _ATTEMPT_COUNTS.get(attempt_key, 0) + 1
+    if _ATTEMPT_COUNTS[attempt_key] <= fail_times:
+        error_msg = "flaky failure"
+        raise RuntimeError(error_msg)
+    return {"success": True}
+
+
+@broker.task
+async def _always_failing_task(raw_input: dict[str, Any]) -> dict[str, Any]:
+    """Always raise, to exercise retry exhaustion."""
+    error_msg = "always fails"
+    raise RuntimeError(error_msg)
+
+
+@pytest.fixture
+async def retry_broker(
+    test_broker: Any,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> Any:
+    """Point StateTrackingMiddleware at the test DB and run retries synchronously."""
+    monkeypatch.setattr("worker_template.middleware.state_tracking.async_session_maker", session_maker)
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_enabled", True)
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_shadow_mode", False)
+    if not any(isinstance(mw, StateTrackingMiddleware) for mw in test_broker.middlewares):
+        register_middleware(test_broker)
+    original_await_inplace = test_broker.await_inplace
+    test_broker.await_inplace = True
+    try:
+        yield test_broker
+    finally:
+        test_broker.await_inplace = original_await_inplace
 
 
 @pytest.mark.integration
@@ -189,3 +235,104 @@ async def test_retry_increments_count(session: AsyncSession):
     assert updated is not None
     assert updated.retry_count == 1
     assert updated.error_detail == "Connection timeout"
+
+
+@pytest.mark.integration
+async def test_flaky_task_retries_until_success(
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+    retry_broker: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = uuid4()
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_tenant_allowlist", str(tenant_id))
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_task_allowlist", _flaky_retry_task.task_name)
+    task = await create_task_execution(
+        session,
+        task_name="_flaky_retry_task",
+        tenant_id=tenant_id,
+        max_retries=2,
+    )
+    await session.commit()
+
+    attempt_key = str(uuid4())
+    await _flaky_retry_task.kiq(
+        raw_input={
+            "task_execution_id": str(task.id),
+            "tenant_id": str(tenant_id),
+            "attempt_key": attempt_key,
+            "fail_times": 1,
+        }
+    )
+
+    async with session_maker() as verify_session:
+        updated = await get_task_execution(verify_session, task.id)
+    assert updated is not None
+    assert updated.status == TaskStatus.COMPLETED
+    assert updated.retry_count == 1
+
+
+@pytest.mark.integration
+async def test_always_failing_task_exhausts_retries(
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+    retry_broker: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = uuid4()
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_tenant_allowlist", str(tenant_id))
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_task_allowlist", _always_failing_task.task_name)
+    task = await create_task_execution(
+        session,
+        task_name="_always_failing_task",
+        tenant_id=tenant_id,
+        max_retries=1,
+    )
+    await session.commit()
+
+    await _always_failing_task.kiq(
+        raw_input={
+            "task_execution_id": str(task.id),
+            "tenant_id": str(tenant_id),
+        }
+    )
+
+    async with session_maker() as verify_session:
+        updated = await get_task_execution(verify_session, task.id)
+    assert updated is not None
+    assert updated.status == TaskStatus.FAILED
+    assert updated.retry_count == 1
+
+
+@pytest.mark.integration
+async def test_shadowed_retry_remains_retrying_through_receiver(
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+    retry_broker: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = uuid4()
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_enabled", False)
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_shadow_mode", True)
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_tenant_allowlist", str(tenant_id))
+    monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_task_allowlist", "_always_failing_task")
+    task = await create_task_execution(
+        session,
+        task_name="_always_failing_task",
+        tenant_id=tenant_id,
+        max_retries=1,
+    )
+    await session.commit()
+
+    await _always_failing_task.kiq(
+        raw_input={
+            "task_execution_id": str(task.id),
+            "tenant_id": str(tenant_id),
+        }
+    )
+
+    async with session_maker() as verify_session:
+        updated = await get_task_execution(verify_session, task.id)
+    assert updated is not None
+    assert updated.status == TaskStatus.RETRYING
+    assert updated.retry_count == 1
