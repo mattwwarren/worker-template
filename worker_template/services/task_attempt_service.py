@@ -36,13 +36,13 @@ async def record_task_attempt(
     return attempt
 
 
-async def get_task_attempt_dispatch_state(
+async def _get_latest_pending_or_dispatched_task_attempt(
     session: AsyncSession,
     *,
     task_execution_id: UUID,
     attempt_number: int,
 ) -> TaskAttempt | None:
-    """Load an attempt whose dispatch state can be recovered after a DB failure."""
+    """Load the latest pending-or-dispatched attempt for an attempt number."""
     stmt = (
         select(TaskAttempt)
         .where(
@@ -55,6 +55,20 @@ async def get_task_attempt_dispatch_state(
     )
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
+
+
+async def get_task_attempt_dispatch_state(
+    session: AsyncSession,
+    *,
+    task_execution_id: UUID,
+    attempt_number: int,
+) -> TaskAttempt | None:
+    """Load an attempt whose dispatch state can be recovered after a DB failure."""
+    return await _get_latest_pending_or_dispatched_task_attempt(
+        session,
+        task_execution_id=task_execution_id,
+        attempt_number=attempt_number,
+    )
 
 
 async def get_latest_pending_task_attempt(
@@ -83,18 +97,11 @@ async def mark_task_attempt_dispatched(
     attempt_number: int,
 ) -> bool:
     """Mark the pending audit entry for a sent retry as dispatched idempotently."""
-    stmt = (
-        select(TaskAttempt)
-        .where(
-            col(TaskAttempt.task_execution_id) == task_execution_id,
-            col(TaskAttempt.attempt_number) == attempt_number,
-            col(TaskAttempt.dispatch_result).in_((TaskDispatchResult.PENDING, TaskDispatchResult.DISPATCHED)),
-        )
-        .order_by(col(TaskAttempt.created_at).desc())
-        .limit(1)
+    attempt = await _get_latest_pending_or_dispatched_task_attempt(
+        session,
+        task_execution_id=task_execution_id,
+        attempt_number=attempt_number,
     )
-    result = await session.execute(stmt)
-    attempt = result.scalar_one_or_none()
     if attempt is None:
         return False
     if attempt.dispatch_result == TaskDispatchResult.PENDING:

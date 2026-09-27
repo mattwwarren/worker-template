@@ -211,10 +211,16 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                         task_execution_id=task_execution_id,
                         attempt_number=attempt.attempt_number or decision.attempt_number,
                     )
-                    if recovered_attempt is not None:
+                    if (
+                        recovered_attempt is not None
+                        and recovered_attempt.dispatch_result == TaskDispatchResult.DISPATCHED
+                    ):
                         await self._recover_dispatch_audit(ctx, recovered_attempt.attempt_number)
-                    else:
+                    elif recovered_attempt is None:
                         raise _missing_retry_audit_error(_RECOVERY_AUDIT_NOT_FOUND)
+                    else:
+                        await session.commit()
+                        status, status_msg = await self._dispatch_retry(ctx, decision)
                 else:
                     pending_attempt = await get_latest_pending_task_attempt(
                         session,

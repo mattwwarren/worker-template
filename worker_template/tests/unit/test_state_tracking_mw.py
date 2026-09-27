@@ -9,6 +9,7 @@ from taskiq import NoResultError
 
 from worker_template.db.retry import DEFAULT_MAX_ATTEMPTS
 from worker_template.middleware.state_tracking import StateTrackingMiddleware
+from worker_template.models.task_attempt import TaskDispatchResult
 from worker_template.models.task_execution import TaskStatus
 
 _STATE_TRACKING_SETTINGS = "worker_template.middleware.state_tracking.settings"
@@ -637,7 +638,7 @@ class TestStateTrackingRetryBehavior:
             if status == TaskStatus.RETRYING:
                 mock_task.retry_count += 1
 
-        pending_attempt = MagicMock()
+        pending_attempt = MagicMock(dispatch_result=TaskDispatchResult.DISPATCHED)
         mock_session, mock_ctx = make_mock_session()
         mock_maker = MagicMock(return_value=mock_ctx)
         recovered_query_result = MagicMock()
@@ -681,6 +682,72 @@ class TestStateTrackingRetryBehavior:
             attempt_number=1,
         )
         assert mock_session.commit.call_count == 3
+        assert isinstance(result.error, NoResultError)
+
+    async def test_on_error_dispatches_pending_audit_after_initial_commit_failure(self, middleware, monkeypatch):
+        task_exec_id = uuid4()
+        tenant_id = uuid4()
+        msg = make_message(labels={"task_execution_id": str(task_exec_id)})
+        result = make_result(is_err=True)
+        exc = RuntimeError("crash")
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_enabled", True)
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_shadow_mode", False)
+        mock_task = MagicMock(
+            status=TaskStatus.RUNNING,
+            retry_count=0,
+            max_retries=3,
+            tenant_id=tenant_id,
+        )
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_tenant_allowlist", str(tenant_id))
+        monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_task_allowlist", msg.task_name)
+
+        async def update_status(_session, _task_id, status, **kwargs):
+            mock_task.status = status
+            mock_task.status_message = kwargs["status_message"]
+            if status == TaskStatus.RETRYING:
+                mock_task.retry_count += 1
+
+        pending_attempt = MagicMock(
+            attempt_number=1,
+            dispatch_result=TaskDispatchResult.PENDING,
+        )
+        mock_session, mock_ctx = make_mock_session()
+        mock_maker = MagicMock(return_value=mock_ctx)
+        commit_error = OperationalError("commit", {}, Exception("connection lost"))
+        mock_session.commit.side_effect = [commit_error, None, None]
+
+        with (
+            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.middleware.state_tracking.get_task_execution", return_value=mock_task),
+            patch(
+                "worker_template.middleware.state_tracking.update_task_status",
+                side_effect=update_status,
+            ),
+            patch(
+                "worker_template.middleware.state_tracking.record_task_attempt",
+                return_value=pending_attempt,
+            ),
+            patch(
+                "worker_template.middleware.state_tracking.get_latest_pending_task_attempt",
+                return_value=None,
+            ),
+            patch(
+                "worker_template.middleware.state_tracking.get_task_attempt_dispatch_state",
+                return_value=pending_attempt,
+            ),
+            patch(
+                "worker_template.middleware.state_tracking.mark_task_attempt_dispatched",
+                return_value=True,
+            ),
+            patch("worker_template.middleware.state_tracking.AsyncKicker") as mock_kicker_cls,
+        ):
+            mock_kicker = mock_kicker_cls.return_value
+            mock_kicker.with_task_id.return_value = mock_kicker
+            mock_kicker.kiq = AsyncMock()
+
+            await middleware.on_error(msg, result, exc)
+
+        mock_kicker.kiq.assert_awaited_once_with(*msg.args, **msg.kwargs)
         assert isinstance(result.error, NoResultError)
 
     async def test_on_error_does_not_increment_retry_count_after_commit_takes_effect(self, middleware):
