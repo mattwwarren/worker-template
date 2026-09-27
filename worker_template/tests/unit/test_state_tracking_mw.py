@@ -48,7 +48,7 @@ class TestStateTrackingPreExecute:
         mock_maker = MagicMock(return_value=mock_ctx)
 
         with (
-            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.db.session.async_session_maker", mock_maker),
             patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
         ):
             result = await middleware.pre_execute(msg)
@@ -85,7 +85,7 @@ class TestStateTrackingPostExecute:
         mock_maker = MagicMock(return_value=mock_ctx)
 
         with (
-            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.db.session.async_session_maker", mock_maker),
             patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
         ):
             await middleware.post_execute(msg, result)
@@ -106,7 +106,7 @@ class TestStateTrackingPostExecute:
         mock_maker = MagicMock(return_value=mock_ctx)
 
         with (
-            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.db.session.async_session_maker", mock_maker),
             patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
         ):
             await middleware.post_execute(msg, result)
@@ -148,7 +148,7 @@ class TestStateTrackingOnError:
         mock_maker = MagicMock(return_value=mock_ctx)
 
         with (
-            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.db.session.async_session_maker", mock_maker),
             patch("worker_template.middleware.state_tracking.get_task_execution", return_value=mock_task),
             patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
         ):
@@ -177,7 +177,7 @@ class TestStateTrackingOnError:
         mock_maker = MagicMock(return_value=mock_ctx)
 
         with (
-            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.db.session.async_session_maker", mock_maker),
             patch("worker_template.middleware.state_tracking.get_task_execution", return_value=mock_task),
             patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
         ):
@@ -201,7 +201,7 @@ class TestStateTrackingOnError:
         mock_maker = MagicMock(return_value=mock_ctx)
 
         with (
-            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.db.session.async_session_maker", mock_maker),
             patch("worker_template.middleware.state_tracking.get_task_execution", return_value=None),
             patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
         ):
