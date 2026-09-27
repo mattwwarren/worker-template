@@ -38,6 +38,7 @@ class _OnErrorAttempt:
     """Track the status mutation attempted by one on_error invocation."""
 
     recorded_status: TaskStatus | None = None
+    recorded_retry_count: int | None = None
     status_message: str | None = None
 
 
@@ -137,8 +138,11 @@ class StateTrackingMiddleware(TaskiqMiddleware):
             task = await get_task_execution(session, task_execution_id)
             retry_already_recorded = (
                 attempt.recorded_status is not None
+                and attempt.recorded_retry_count is not None
                 and task is not None
                 and task.status == attempt.recorded_status
+                and task.retry_count == attempt.recorded_retry_count
+                and task.status_message == attempt.status_message
             )
             if retry_already_recorded:
                 assert attempt.recorded_status is not None
@@ -149,6 +153,9 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                 status_msg = f"Retrying ({task.retry_count + 1}/{task.max_retries})"
 
             if not retry_already_recorded:
+                expected_retry_count = task.retry_count if task is not None else None
+                if status == TaskStatus.RETRYING and expected_retry_count is not None:
+                    expected_retry_count += 1
                 await update_task_status(
                     session,
                     task_execution_id,
@@ -157,6 +164,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                     status_message=status_msg,
                 )
                 attempt.recorded_status = status
+                attempt.recorded_retry_count = expected_retry_count
                 attempt.status_message = status_msg
             await session.commit()
         await self._emit_status_event(
