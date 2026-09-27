@@ -13,6 +13,7 @@ from uuid import UUID
 from taskiq import NoResultError, TaskiqMessage, TaskiqMiddleware, TaskiqResult
 from taskiq.kicker import AsyncKicker
 
+from worker_template.core.config import settings
 from worker_template.db.session import async_session_maker
 from worker_template.models.task_execution import TaskStatus
 from worker_template.realtime.contracts import (
@@ -24,6 +25,7 @@ from worker_template.realtime.contracts import (
     TaskStatusEvent,
 )
 from worker_template.realtime.emitter import emit_task_event
+from worker_template.services.task_attempt_service import record_task_attempt
 from worker_template.services.task_execution_service import get_task_execution, update_task_status
 
 LOGGER = logging.getLogger(__name__)
@@ -109,9 +111,23 @@ class StateTrackingMiddleware(TaskiqMiddleware):
             # Check if we should retry
             task = await get_task_execution(session, task_execution_id)
             should_retry = task is not None and task.retry_count < task.max_retries
+            retry_allowed = (
+                should_retry and task is not None and self._retry_gate_allows(message.task_name, task.tenant_id)
+            )
+            retry_shadowed = should_retry and not retry_allowed and settings.task_retry_shadow_mode
+            status_before = task.status if task is not None else TaskStatus.RUNNING
+            attempt_number = task.retry_count + 1 if task is not None else 1
             if should_retry:
-                status = TaskStatus.RETRYING
-                status_msg = f"Retrying ({task.retry_count + 1}/{task.max_retries})"  # type: ignore[union-attr]
+                if retry_allowed:
+                    status = TaskStatus.RETRYING
+                    status_msg = f"Retrying ({task.retry_count + 1}/{task.max_retries})"  # type: ignore[union-attr]
+                else:
+                    status = TaskStatus.FAILED
+                    status_msg = (
+                        "Retry shadowed (automatic retry disabled)"
+                        if retry_shadowed
+                        else "Task failed (automatic retry disabled)"
+                    )
 
             await update_task_status(
                 session,
@@ -120,11 +136,44 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                 error_detail=error_detail,
                 status_message=status_msg,
             )
+            if should_retry and not retry_allowed:
+                await record_task_attempt(
+                    session,
+                    task_execution_id=task_execution_id,
+                    tenant_id=task.tenant_id,  # type: ignore[union-attr]
+                    attempt_number=attempt_number,
+                    status_before=status_before,
+                    status_after=status,
+                    error_detail=error_detail,
+                    dispatch_result="shadowed" if retry_shadowed else "blocked",
+                )
+            elif retry_allowed:
+                await record_task_attempt(
+                    session,
+                    task_execution_id=task_execution_id,
+                    tenant_id=task.tenant_id,  # type: ignore[union-attr]
+                    attempt_number=attempt_number,
+                    status_before=status_before,
+                    status_after=TaskStatus.RETRYING,
+                    error_detail=error_detail,
+                    dispatch_result="pending",
+                )
             await session.commit()
 
-            if should_retry:
+            if retry_allowed:
                 requeued = await self._requeue(message)
                 if requeued:
+                    await record_task_attempt(
+                        session,
+                        task_execution_id=task_execution_id,
+                        tenant_id=task.tenant_id,  # type: ignore[union-attr]
+                        attempt_number=attempt_number,
+                        status_before=TaskStatus.RETRYING,
+                        status_after=TaskStatus.RETRYING,
+                        error_detail=error_detail,
+                        dispatch_result="dispatched",
+                    )
+                    await session.commit()
                     result.error = NoResultError()
                 else:
                     status = TaskStatus.FAILED
@@ -135,6 +184,16 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                         status,
                         error_detail=error_detail,
                         status_message=status_msg,
+                    )
+                    await record_task_attempt(
+                        session,
+                        task_execution_id=task_execution_id,
+                        tenant_id=task.tenant_id,  # type: ignore[union-attr]
+                        attempt_number=attempt_number,
+                        status_before=TaskStatus.RETRYING,
+                        status_after=status,
+                        error_detail=error_detail,
+                        dispatch_result="dispatch_failed",
                     )
                     await session.commit()
 
@@ -158,6 +217,19 @@ class StateTrackingMiddleware(TaskiqMiddleware):
             LOGGER.warning("task_requeue_error", extra={"task_name": message.task_name}, exc_info=True)
             return False
         return True
+
+    def _retry_gate_allows(self, task_name: str, tenant_id: UUID) -> bool:
+        """Return whether automatic retries are enabled for this task and tenant."""
+        if not settings.task_retry_enabled:
+            return False
+
+        tenant_allowlist = {
+            value.strip() for value in settings.task_retry_tenant_allowlist.split(",") if value.strip()
+        }
+        task_allowlist = {value.strip() for value in settings.task_retry_task_allowlist.split(",") if value.strip()}
+        if not tenant_allowlist and not task_allowlist:
+            return True
+        return str(tenant_id) in tenant_allowlist or task_name in task_allowlist
 
     async def _emit_status_event(
         self,

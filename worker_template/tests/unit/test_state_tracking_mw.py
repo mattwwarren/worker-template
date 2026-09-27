@@ -148,7 +148,9 @@ class TestStateTrackingPostExecute:
 
 class TestStateTrackingOnError:
     @pytest.fixture
-    def middleware(self):
+    def middleware(self, monkeypatch):
+        monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_enabled", True)
+        monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_shadow_mode", False)
         return StateTrackingMiddleware()
 
     async def test_sets_retrying_when_retries_available(self, middleware):
@@ -160,6 +162,7 @@ class TestStateTrackingOnError:
         mock_task = MagicMock()
         mock_task.retry_count = 0
         mock_task.max_retries = 3
+        mock_task.status = TaskStatus.RUNNING
 
         mock_session, mock_ctx = make_mock_session()
         mock_maker = MagicMock(return_value=mock_ctx)
@@ -168,6 +171,7 @@ class TestStateTrackingOnError:
             patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
             patch("worker_template.middleware.state_tracking.get_task_execution", return_value=mock_task),
             patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
+            patch("worker_template.middleware.state_tracking.record_task_attempt") as mock_audit,
             patch("worker_template.middleware.state_tracking.AsyncKicker") as mock_kicker_cls,
         ):
             mock_kicker = mock_kicker_cls.return_value
@@ -183,7 +187,7 @@ class TestStateTrackingOnError:
                 error_detail="RuntimeError: crash",
                 status_message="Retrying (1/3)",
             )
-            mock_session.commit.assert_called_once()
+            assert mock_session.commit.await_count == 2
 
             mock_kicker_cls.assert_called_once_with(
                 task_name=msg.task_name,
@@ -192,7 +196,55 @@ class TestStateTrackingOnError:
             )
             mock_kicker.with_task_id.assert_called_once_with(msg.task_id)
             mock_kicker.kiq.assert_awaited_once_with(*msg.args, **msg.kwargs)
+            assert mock_audit.await_count == 2
             assert isinstance(result.error, NoResultError)
+
+    async def test_shadow_mode_records_without_requeue(self, middleware, monkeypatch):
+        monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_enabled", False)
+        monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_shadow_mode", True)
+        task_exec_id = uuid4()
+        tenant_id = uuid4()
+        msg = make_message(labels={"task_execution_id": str(task_exec_id)})
+        result = make_result(is_err=True)
+        exc = RuntimeError("crash")
+
+        mock_task = MagicMock()
+        mock_task.retry_count = 0
+        mock_task.max_retries = 3
+        mock_task.status = TaskStatus.RUNNING
+        mock_task.tenant_id = tenant_id
+
+        mock_session, mock_ctx = make_mock_session()
+        mock_maker = MagicMock(return_value=mock_ctx)
+
+        with (
+            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.middleware.state_tracking.get_task_execution", return_value=mock_task),
+            patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
+            patch("worker_template.middleware.state_tracking.record_task_attempt") as mock_audit,
+            patch("worker_template.middleware.state_tracking.AsyncKicker") as mock_kicker_cls,
+        ):
+            await middleware.on_error(msg, result, exc)
+
+            mock_update.assert_called_once_with(
+                mock_session,
+                task_exec_id,
+                TaskStatus.FAILED,
+                error_detail="RuntimeError: crash",
+                status_message="Retry shadowed (automatic retry disabled)",
+            )
+            mock_kicker_cls.assert_not_called()
+            mock_audit.assert_awaited_once_with(
+                mock_session,
+                task_execution_id=task_exec_id,
+                tenant_id=tenant_id,
+                attempt_number=1,
+                status_before=TaskStatus.RUNNING,
+                status_after=TaskStatus.FAILED,
+                error_detail="RuntimeError: crash",
+                dispatch_result="shadowed",
+            )
+            assert result.error is None
 
     async def test_sets_failed_when_max_retries_exceeded(self, middleware):
         task_exec_id = uuid4()
@@ -262,6 +314,7 @@ class TestStateTrackingOnError:
         mock_task = MagicMock()
         mock_task.retry_count = 0
         mock_task.max_retries = 3
+        mock_task.status = TaskStatus.RUNNING
 
         mock_session, mock_ctx = make_mock_session()
         mock_maker = MagicMock(return_value=mock_ctx)
@@ -270,6 +323,7 @@ class TestStateTrackingOnError:
             patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
             patch("worker_template.middleware.state_tracking.get_task_execution", return_value=mock_task),
             patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
+            patch("worker_template.middleware.state_tracking.record_task_attempt") as mock_audit,
             patch("worker_template.middleware.state_tracking.AsyncKicker") as mock_kicker_cls,
         ):
             mock_kicker = mock_kicker_cls.return_value
@@ -293,6 +347,7 @@ class TestStateTrackingOnError:
                 error_detail="RuntimeError: crash",
                 status_message="Task failed (retry dispatch error)",
             )
+            assert mock_audit.await_count == 2
             assert result.error is None
 
     async def test_skips_when_no_task_execution_id(self, middleware):

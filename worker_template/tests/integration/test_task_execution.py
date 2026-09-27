@@ -48,6 +48,8 @@ async def retry_broker(
 ) -> Any:
     """Point StateTrackingMiddleware at the test DB and run retries synchronously."""
     monkeypatch.setattr("worker_template.middleware.state_tracking.async_session_maker", session_maker)
+    monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_enabled", True)
+    monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_shadow_mode", False)
     if not any(isinstance(mw, StateTrackingMiddleware) for mw in test_broker.middlewares):
         register_middleware(test_broker)
     original_await_inplace = test_broker.await_inplace
