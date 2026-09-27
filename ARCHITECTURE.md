@@ -139,8 +139,10 @@ and the tenant/task retry gate is enabled, it writes `RETRYING`, then re-kicks
 the same message (same `task_id`, same args/kwargs/labels) via
 `taskiq.kicker.AsyncKicker`, immediately — no delay/backoff, since the shipped
 `AioPikaBroker` has no delay queue configured. The gate is disabled by default
-and supports tenant/task allowlists; shadow mode records intended retries
-without dispatching them. Every retry decision and dispatch outcome is also
+and requires both non-empty, matching tenant and task allowlists; an empty
+allowlist denies automatic retries. Shadow mode records intended retries as
+nonterminal `RETRYING` rows without dispatching them, leaving an explicit
+operator recovery point. Every retry decision and dispatch outcome is also
 written to the append-only `task_attempt` audit table. If the re-kick itself
 fails to send, the row is reconciled to `FAILED` ("Task failed (retry dispatch
 error)") in the same `on_error` call. On successful dispatch, `on_error` marks
@@ -165,9 +167,10 @@ Two transaction boundaries exist by design, and they are independent:
 State transitions also emit realtime events (fire-and-forget) — see below.
 
 > **Known gaps:** (1) *Resolved* — `on_error` uses a tenant/task-scoped,
-> opt-in retry gate (with shadow mode) and re-enqueues via `AsyncKicker` when
-> `task.retry_count < task.max_retries`; each decision and dispatch outcome is
-> recorded in `task_attempt`; see above.
+> opt-in retry gate requiring both matching allowlists (with nonterminal shadow
+> mode) and re-enqueues via `AsyncKicker` when `task.retry_count <
+> task.max_retries`; each decision and dispatch outcome is recorded in
+> `task_attempt`; see above.
 > (2) `db/retry.py` (`@db_retry`, tenacity backoff for transient
 > `OperationalError`) exists and is tested but is not applied to any
 > production call site. (3) There is no idempotency-key pattern;

@@ -15,6 +15,7 @@ from taskiq.kicker import AsyncKicker
 
 from worker_template.core.config import settings
 from worker_template.db.session import async_session_maker
+from worker_template.models.task_attempt import TaskDispatchResult
 from worker_template.models.task_execution import TaskStatus
 from worker_template.realtime.contracts import (
     TASK_COMPLETED,
@@ -121,13 +122,12 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                 if retry_allowed:
                     status = TaskStatus.RETRYING
                     status_msg = f"Retrying ({task.retry_count + 1}/{task.max_retries})"  # type: ignore[union-attr]
+                elif retry_shadowed:
+                    status = TaskStatus.RETRYING
+                    status_msg = "Retry shadowed (automatic retry disabled)"
                 else:
                     status = TaskStatus.FAILED
-                    status_msg = (
-                        "Retry shadowed (automatic retry disabled)"
-                        if retry_shadowed
-                        else "Task failed (automatic retry disabled)"
-                    )
+                    status_msg = "Task failed (automatic retry disabled)"
 
             await update_task_status(
                 session,
@@ -145,7 +145,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                     status_before=status_before,
                     status_after=status,
                     error_detail=error_detail,
-                    dispatch_result="shadowed" if retry_shadowed else "blocked",
+                    dispatch_result=(TaskDispatchResult.SHADOWED if retry_shadowed else TaskDispatchResult.BLOCKED),
                 )
             elif retry_allowed:
                 await record_task_attempt(
@@ -156,7 +156,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                     status_before=status_before,
                     status_after=TaskStatus.RETRYING,
                     error_detail=error_detail,
-                    dispatch_result="pending",
+                    dispatch_result=TaskDispatchResult.PENDING,
                 )
             await session.commit()
 
@@ -171,7 +171,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                         status_before=TaskStatus.RETRYING,
                         status_after=TaskStatus.RETRYING,
                         error_detail=error_detail,
-                        dispatch_result="dispatched",
+                        dispatch_result=TaskDispatchResult.DISPATCHED,
                     )
                     await session.commit()
                     result.error = NoResultError()
@@ -193,7 +193,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                         status_before=TaskStatus.RETRYING,
                         status_after=status,
                         error_detail=error_detail,
-                        dispatch_result="dispatch_failed",
+                        dispatch_result=TaskDispatchResult.DISPATCH_FAILED,
                     )
                     await session.commit()
 
@@ -227,9 +227,9 @@ class StateTrackingMiddleware(TaskiqMiddleware):
             value.strip() for value in settings.task_retry_tenant_allowlist.split(",") if value.strip()
         }
         task_allowlist = {value.strip() for value in settings.task_retry_task_allowlist.split(",") if value.strip()}
-        if not tenant_allowlist and not task_allowlist:
-            return True
-        return str(tenant_id) in tenant_allowlist or task_name in task_allowlist
+        if not tenant_allowlist or not task_allowlist:
+            return False
+        return str(tenant_id) in tenant_allowlist and task_name in task_allowlist
 
     async def _emit_status_event(
         self,

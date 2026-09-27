@@ -60,9 +60,10 @@ reference. Note: `on_error` re-enqueues the message (same `task_id`, via
 `AsyncKicker`) when the tenant/task gate permits and `retry_count <
 max_retries`; `post_execute` skips its own status write when a retry was
 dispatched, so it never clobbers
-`RETRYING`. Automatic retries are opt-in through the tenant/task gate, shadow
-mode records intended retries, and each retry decision/dispatch outcome is
-retained in the append-only `task_attempt` audit table.
+`RETRYING`. Automatic retries are opt-in through matching tenant and task
+allowlists, shadow mode records intended retries as nonterminal `RETRYING`, and
+each retry decision/dispatch outcome is retained in the append-only
+`task_attempt` audit table.
 
 ### Middleware Pipeline Order
 
@@ -151,10 +152,10 @@ uv run pytest
 - Middleware pipeline for cross-cutting concerns
 - TaskExecution state tracking for observability
 - Retry status tracking via middleware (`RETRYING` is recorded and the
-  message is re-enqueued via `AsyncKicker` when the tenant/task gate permits;
-  shadow mode and the append-only `task_attempt` audit table cover rollout and
-  dispatch outcomes; `db_retry` exists for transient DB failures but must be
-  applied explicitly)
+  message is re-enqueued via `AsyncKicker` when both tenant/task allowlists
+  permit; shadow mode records nonterminal intended retries and the append-only
+  `task_attempt` audit table covers rollout and dispatch outcomes; `db_retry`
+  exists for transient DB failures but must be applied explicitly)
 
 ### Testing Patterns
 

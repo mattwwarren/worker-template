@@ -4,7 +4,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from worker_template.models.task_attempt import TaskAttempt
+from worker_template.models.task_attempt import TaskAttempt, TaskDispatchResult
 from worker_template.models.task_execution import TaskStatus
 
 
@@ -17,7 +17,7 @@ async def record_task_attempt(
     status_before: TaskStatus,
     status_after: TaskStatus,
     error_detail: str | None,
-    dispatch_result: str,
+    dispatch_result: TaskDispatchResult,
 ) -> TaskAttempt:
     """Append a durable record for one retry decision."""
     attempt = TaskAttempt(

@@ -7,6 +7,7 @@ Create Date: 2026-09-27
 """
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
@@ -27,7 +28,7 @@ def upgrade() -> None:
         sa.Column("attempt_number", sa.Integer(), nullable=False),
         sa.Column(
             "status_before",
-            sa.Enum(
+            postgresql.ENUM(
                 "PENDING",
                 "QUEUED",
                 "RUNNING",
@@ -38,12 +39,13 @@ def upgrade() -> None:
                 "PARTIAL",
                 name="taskstatus",
                 create_constraint=True,
+                create_type=False,
             ),
             nullable=False,
         ),
         sa.Column(
             "status_after",
-            sa.Enum(
+            postgresql.ENUM(
                 "PENDING",
                 "QUEUED",
                 "RUNNING",
@@ -54,11 +56,16 @@ def upgrade() -> None:
                 "PARTIAL",
                 name="taskstatus",
                 create_constraint=True,
+                create_type=False,
             ),
             nullable=False,
         ),
         sa.Column("error_detail", sa.String(), nullable=True),
         sa.Column("dispatch_result", sa.String(length=32), nullable=False),
+        sa.CheckConstraint(
+            "dispatch_result IN ('blocked', 'dispatched', 'dispatch_failed', 'pending', 'shadowed')",
+            name="ck_task_attempt_dispatch_result",
+        ),
         sa.ForeignKeyConstraint(["task_execution_id"], ["task_execution.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
