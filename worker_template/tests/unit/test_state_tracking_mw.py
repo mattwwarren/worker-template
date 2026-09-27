@@ -165,6 +165,70 @@ class TestStateTrackingOnError:
             )
             mock_session.commit.assert_called_once()
 
+    async def test_increments_retrying_task_on_new_on_error_invocation(self, middleware):
+        task_exec_id = uuid4()
+        msg = make_message(labels={"task_execution_id": str(task_exec_id)})
+        result = make_result(is_err=True)
+        exc = RuntimeError("crash")
+
+        mock_task = MagicMock(status=TaskStatus.RETRYING, retry_count=1, max_retries=3)
+
+        async def update_status(_session, _task_id, status, **_kwargs):
+            mock_task.status = status
+            if status == TaskStatus.RETRYING:
+                mock_task.retry_count += 1
+
+        mock_session, mock_ctx = make_mock_session()
+        mock_maker = MagicMock(return_value=mock_ctx)
+
+        with (
+            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch(
+                "worker_template.middleware.state_tracking.get_task_execution", return_value=mock_task
+            ),
+            patch(
+                "worker_template.middleware.state_tracking.update_task_status",
+                side_effect=update_status,
+            ) as mock_update,
+        ):
+            await middleware.on_error(msg, result, exc)
+
+        assert mock_task.retry_count == 2
+        mock_update.assert_called_once_with(
+            mock_session,
+            task_exec_id,
+            TaskStatus.RETRYING,
+            error_detail="RuntimeError: crash",
+            status_message="Retrying (2/3)",
+        )
+
+    async def test_fails_when_existing_retrying_task_reaches_max_retries(self, middleware):
+        task_exec_id = uuid4()
+        msg = make_message(labels={"task_execution_id": str(task_exec_id)})
+        result = make_result(is_err=True)
+        exc = RuntimeError("crash")
+
+        mock_task = MagicMock(status=TaskStatus.RETRYING, retry_count=3, max_retries=3)
+        mock_session, mock_ctx = make_mock_session()
+        mock_maker = MagicMock(return_value=mock_ctx)
+
+        with (
+            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch(
+                "worker_template.middleware.state_tracking.get_task_execution", return_value=mock_task
+            ),
+            patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
+        ):
+            await middleware.on_error(msg, result, exc)
+
+        mock_update.assert_called_once_with(
+            mock_session,
+            task_exec_id,
+            TaskStatus.FAILED,
+            error_detail="RuntimeError: crash",
+            status_message="Task failed (max retries exceeded)",
+        )
+
     async def test_sets_failed_when_max_retries_exceeded(self, middleware):
         task_exec_id = uuid4()
         msg = make_message(labels={"task_execution_id": str(task_exec_id)})

@@ -7,6 +7,7 @@ is persisted even when the task's transaction rolls back on error.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -30,6 +31,14 @@ LOGGER = logging.getLogger(__name__)
 
 _TASK_EXECUTION_ID_KEY = "task_execution_id"
 RAW_INPUT_KEY = "raw_input"
+
+
+@dataclass
+class _OnErrorAttempt:
+    """Track the status mutation attempted by one on_error invocation."""
+
+    recorded_status: TaskStatus | None = None
+    status_message: str | None = None
 
 
 class StateTrackingMiddleware(TaskiqMiddleware):
@@ -91,7 +100,6 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         else:
             await self._emit_status_event(message, TaskStatus.COMPLETED, status_message="Task completed successfully")
 
-    @db_retry
     async def on_error(
         self,
         message: TaskiqMessage,
@@ -103,18 +111,39 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         if task_execution_id is None:
             return
 
+        await self._record_error_status(
+            message,
+            result,
+            exception,
+            task_execution_id,
+            _OnErrorAttempt(),
+        )
+
+    @db_retry
+    async def _record_error_status(
+        self,
+        message: TaskiqMessage,
+        result: TaskiqResult[Any],
+        exception: BaseException,
+        task_execution_id: UUID,
+        attempt: _OnErrorAttempt,
+    ) -> None:
+        """Record an error, retrying with invocation-scoped idempotency state."""
         status = TaskStatus.FAILED
         status_msg = "Task failed (max retries exceeded)"
 
         async with async_session_maker() as session:
             # Check if we should retry
             task = await get_task_execution(session, task_execution_id)
-            retry_already_recorded = False
-            if task is not None and task.status == TaskStatus.RETRYING:
-                # A prior commit may have succeeded before raising OperationalError.
-                retry_already_recorded = True
-                status = TaskStatus.RETRYING
-                status_msg = f"Retrying ({task.retry_count}/{task.max_retries})"
+            retry_already_recorded = (
+                attempt.recorded_status is not None
+                and task is not None
+                and task.status == attempt.recorded_status
+            )
+            if retry_already_recorded:
+                assert attempt.recorded_status is not None
+                status = attempt.recorded_status
+                status_msg = attempt.status_message or status_msg
             elif task is not None and task.retry_count < task.max_retries:
                 status = TaskStatus.RETRYING
                 status_msg = f"Retrying ({task.retry_count + 1}/{task.max_retries})"
@@ -127,6 +156,8 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                     error_detail=f"{type(exception).__name__}: {exception}",
                     status_message=status_msg,
                 )
+                attempt.recorded_status = status
+                attempt.status_message = status_msg
             await session.commit()
         await self._emit_status_event(
             message,
