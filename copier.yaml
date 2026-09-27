@@ -11,6 +11,10 @@ _exclude:
   - ".templatized"
   - ".templatized/**"
   - "REMEDIATION-STATUS.md"
+  # Scheduler subsystem is optional; devspace.yaml's scheduler block is gated in templatize.sh
+  - "{% if not enable_scheduler %}{{ project_slug }}/scheduler.py{% endif %}"
+  - "{% if not enable_scheduler %}{{ project_slug }}/tests/unit/test_scheduler.py{% endif %}"
+  - "{% if not enable_scheduler %}scripts/start-scheduler.sh{% endif %}"
 
 project_name:
   type: str
@@ -33,24 +37,9 @@ port:
   default: 8080
   validator: "{% if port < 1024 or port > 65535 %}Port must be 1024-65535{% endif %}"
 
-multi_tenant:
-  type: bool
-  help: "Enable tenant isolation via labels and DB filtering?"
-  default: true
-
-enable_metrics:
-  type: bool
-  help: "Enable Prometheus metrics endpoint at /metrics?"
-  default: true
-
 enable_scheduler:
   type: bool
   help: "Include scheduler deployment for cron jobs?"
-  default: true
-
-database_enabled:
-  type: bool
-  help: "Enable database access and TaskExecution tracking?"
   default: true
 
 _tasks:
@@ -68,10 +57,7 @@ _message_after: |
     3. Health check: http://localhost:{{ port }}/health
 
   Configuration Summary:
-    - Multi-tenant: {{ 'Enabled' if multi_tenant else 'Disabled' }}
-    - Metrics: {{ 'Enabled at /metrics' if enable_metrics else 'Disabled' }}
     - Scheduler: {{ 'Enabled' if enable_scheduler else 'Disabled' }}
-    - Database: {{ 'Enabled' if database_enabled else 'Disabled' }}
 
   Next Steps:
     - Add your task contracts in {{ project_slug }}/tasks/contracts.py
