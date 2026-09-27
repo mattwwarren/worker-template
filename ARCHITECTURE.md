@@ -124,7 +124,7 @@ top-to-bottom, `post_execute`/`on_error` bottom-to-top:
 
 ```
 PENDING → QUEUED → RUNNING → COMPLETED / FAILED / PARTIAL
-                  ↳ RETRYING (label only — see Known gaps)
+                  ↳ RETRYING → RUNNING (re-enqueued; see below)
                   ↳ CANCELLED
 ```
 
@@ -133,6 +133,19 @@ Of these, the middleware itself sets only `RUNNING` (pre_execute),
 Creating the row in the first place (`create_task_execution`, which is what
 produces `PENDING`) is the dispatching caller's responsibility, and
 `QUEUED`/`CANCELLED`/`PARTIAL` are states an instance sets itself.
+
+`on_error` re-enqueues for real: when `task.retry_count < task.max_retries`
+it writes `RETRYING`, then re-kicks the same message (same `task_id`, same
+args/kwargs/labels) via `taskiq.kicker.AsyncKicker`, immediately — no
+delay/backoff, since the shipped `AioPikaBroker` has no delay queue
+configured. If the re-kick itself fails to send, the row is reconciled to
+`FAILED` ("Task failed (retry dispatch error)") in the same `on_error` call.
+On successful dispatch, `on_error` marks `result.error` with TaskIQ's
+`NoResultError` sentinel; `post_execute` checks for that sentinel first and
+returns immediately, so it never clobbers the `RETRYING` (or, for a
+synchronous retry chain such as the `InMemoryBroker` under
+`await_inplace=True`, an already-`COMPLETED`) status the retried attempt's
+own `on_error`/`post_execute` just wrote.
 
 (This section is the authoritative description of the state machine and
 middleware pipeline; other docs point here.)
@@ -148,10 +161,9 @@ Two transaction boundaries exist by design, and they are independent:
 
 State transitions also emit realtime events (fire-and-forget) — see below.
 
-> **Known gaps:** (1) `RETRYING` is a status label — the middleware
-> increments `retry_count` and records the state, but nothing re-enqueues
-> the message; TaskIQ does not retry automatically and no retry middleware
-> is wired. (2) `db/retry.py` (`@db_retry`, tenacity backoff for transient
+> **Known gaps:** (1) *Resolved* — `on_error` re-enqueues via `AsyncKicker`
+> gated on `task.retry_count < task.max_retries`; see above.
+> (2) `db/retry.py` (`@db_retry`, tenacity backoff for transient
 > `OperationalError`) exists and is tested but is not applied to any
 > production call site. (3) There is no idempotency-key pattern;
 > `parent_task_id` supports task trees, not dedup. (4)
