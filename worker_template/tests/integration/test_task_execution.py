@@ -28,14 +28,16 @@ async def _flaky_retry_task(raw_input: dict[str, Any]) -> dict[str, Any]:
     fail_times = raw_input["fail_times"]
     _ATTEMPT_COUNTS[attempt_key] = _ATTEMPT_COUNTS.get(attempt_key, 0) + 1
     if _ATTEMPT_COUNTS[attempt_key] <= fail_times:
-        raise RuntimeError("flaky failure")
+        error_msg = "flaky failure"
+        raise RuntimeError(error_msg)
     return {"success": True}
 
 
 @broker.task
 async def _always_failing_task(raw_input: dict[str, Any]) -> dict[str, Any]:
     """Always raise, to exercise retry exhaustion."""
-    raise RuntimeError("always fails")
+    error_msg = "always fails"
+    raise RuntimeError(error_msg)
 
 
 @pytest.fixture
@@ -233,7 +235,11 @@ async def test_retry_increments_count(session: AsyncSession):
 
 
 @pytest.mark.integration
-async def test_flaky_task_retries_until_success(session: AsyncSession, retry_broker: Any) -> None:
+async def test_flaky_task_retries_until_success(
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+    retry_broker: Any,
+) -> None:
     tenant_id = uuid4()
     task = await create_task_execution(
         session,
@@ -253,14 +259,19 @@ async def test_flaky_task_retries_until_success(session: AsyncSession, retry_bro
         }
     )
 
-    updated = await get_task_execution(session, task.id)
+    async with session_maker() as verify_session:
+        updated = await get_task_execution(verify_session, task.id)
     assert updated is not None
     assert updated.status == TaskStatus.COMPLETED
     assert updated.retry_count == 1
 
 
 @pytest.mark.integration
-async def test_always_failing_task_exhausts_retries(session: AsyncSession, retry_broker: Any) -> None:
+async def test_always_failing_task_exhausts_retries(
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+    retry_broker: Any,
+) -> None:
     tenant_id = uuid4()
     task = await create_task_execution(
         session,
@@ -277,7 +288,8 @@ async def test_always_failing_task_exhausts_retries(session: AsyncSession, retry
         }
     )
 
-    updated = await get_task_execution(session, task.id)
+    async with session_maker() as verify_session:
+        updated = await get_task_execution(verify_session, task.id)
     assert updated is not None
     assert updated.status == TaskStatus.FAILED
     assert updated.retry_count == 1
