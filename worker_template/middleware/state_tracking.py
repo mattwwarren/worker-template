@@ -233,9 +233,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                             attempt_number=pending_attempt.attempt_number,
                         )
                         if not marked:
-                            raise _missing_retry_audit_error(
-                                _RECONCILIATION_AUDIT_NOT_FOUND
-                            )
+                            raise _missing_retry_audit_error(_RECONCILIATION_AUDIT_NOT_FOUND)
                     await self._record_initial_error_status(ctx, decision)
                     await session.commit()
                     status, status_msg = await self._dispatch_retry(ctx, decision)
