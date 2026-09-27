@@ -324,6 +324,42 @@ class TestStateTrackingRetryBehavior:
             assert mock_maker.call_count == 2
             mock_session.commit.assert_called_once()
 
+    async def test_on_error_does_not_increment_retry_count_after_commit_takes_effect(
+        self, middleware
+    ):
+        task_exec_id = uuid4()
+        msg = make_message(labels={"task_execution_id": str(task_exec_id)})
+        result = make_result(is_err=True)
+        exc = RuntimeError("crash")
+
+        first_task = MagicMock(status=TaskStatus.RUNNING, retry_count=0, max_retries=3)
+        second_task = MagicMock(status=TaskStatus.RETRYING, retry_count=1, max_retries=3)
+        mock_session, mock_ctx = make_mock_session()
+        mock_maker = MagicMock(return_value=mock_ctx)
+
+        async def update_once(*args, **kwargs):
+            first_task.status = TaskStatus.RETRYING
+            first_task.retry_count = 1
+
+        commit_error = OperationalError("commit", {}, Exception("connection lost"))
+        with (
+            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch(
+                "worker_template.middleware.state_tracking.get_task_execution",
+                side_effect=[first_task, second_task],
+            ),
+            patch(
+                "worker_template.middleware.state_tracking.update_task_status",
+                side_effect=update_once,
+            ) as mock_update,
+        ):
+            mock_session.commit.side_effect = [commit_error, None]
+            await middleware.on_error(msg, result, exc)
+
+        assert mock_maker.call_count == 2
+        assert mock_session.commit.call_count == 2
+        mock_update.assert_called_once()
+
     async def test_pre_execute_raises_after_max_attempts(self, middleware):
         task_exec_id = uuid4()
         msg = make_message(labels={"task_execution_id": str(task_exec_id)})

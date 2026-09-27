@@ -109,17 +109,24 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         async with async_session_maker() as session:
             # Check if we should retry
             task = await get_task_execution(session, task_execution_id)
-            if task is not None and task.retry_count < task.max_retries:
+            retry_already_recorded = False
+            if task is not None and task.status == TaskStatus.RETRYING:
+                # A prior commit may have succeeded before raising OperationalError.
+                retry_already_recorded = True
+                status = TaskStatus.RETRYING
+                status_msg = f"Retrying ({task.retry_count}/{task.max_retries})"
+            elif task is not None and task.retry_count < task.max_retries:
                 status = TaskStatus.RETRYING
                 status_msg = f"Retrying ({task.retry_count + 1}/{task.max_retries})"
 
-            await update_task_status(
-                session,
-                task_execution_id,
-                status,
-                error_detail=f"{type(exception).__name__}: {exception}",
-                status_message=status_msg,
-            )
+            if not retry_already_recorded:
+                await update_task_status(
+                    session,
+                    task_execution_id,
+                    status,
+                    error_detail=f"{type(exception).__name__}: {exception}",
+                    status_message=status_msg,
+                )
             await session.commit()
         await self._emit_status_event(
             message,
