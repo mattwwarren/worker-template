@@ -142,23 +142,21 @@ Two transaction boundaries exist by design, and they are independent:
 - **The task body owns its domain transaction.** Services flush; the task
   commits (same rule as the API template's "endpoints commit").
 - **StateTrackingMiddleware owns the TaskExecution row's transaction**, in
-  its own session, committed in every branch — so the recorded
-  RUNNING/FAILED status survives even when the task's own transaction rolls
-  back.
+  its own session, committed in every branch, with `@db_retry` retrying the
+  commit on transient `OperationalError` — so the recorded RUNNING/FAILED
+  status survives even when the task's own transaction rolls back.
 
 State transitions also emit realtime events (fire-and-forget) — see below.
 
 > **Known gaps:** (1) `RETRYING` is a status label — the middleware
 > increments `retry_count` and records the state, but nothing re-enqueues
 > the message; TaskIQ does not retry automatically and no retry middleware
-> is wired. (2) `db/retry.py` (`@db_retry`, tenacity backoff for transient
-> `OperationalError`) exists and is tested but is not applied to any
-> production call site. (3) There is no idempotency-key pattern;
-> `parent_task_id` supports task trees, not dedup. (4)
+> is wired. (2) There is no idempotency-key pattern;
+> `parent_task_id` supports task trees, not dedup. (3)
 > `create_task_execution` has no production call site — the shipped example
 > task doesn't thread a `task_execution_id`, so StateTrackingMiddleware
 > no-ops end-to-end for it; wiring row creation into dispatch is left to
-> the instance. Treat all four as instance-level decisions, not shipped
+> the instance. Treat all three as instance-level decisions, not shipped
 > behavior.
 
 ## Data layer

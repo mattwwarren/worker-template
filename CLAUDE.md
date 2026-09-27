@@ -146,8 +146,8 @@ uv run pytest
 - Middleware pipeline for cross-cutting concerns
 - TaskExecution state tracking for observability
 - Retry status tracking via middleware (`RETRYING` is recorded, not
-  auto-re-enqueued; `db_retry` exists for transient DB failures but must be
-  applied explicitly)
+  auto-re-enqueued; `db_retry` wraps StateTrackingMiddleware's own-session
+  commits for transient DB failures)
 
 ### Testing Patterns
 
