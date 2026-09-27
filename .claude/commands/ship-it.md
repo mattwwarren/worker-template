@@ -42,7 +42,7 @@ approval.
 Draft the title from the branch's commits (or use `EXPLICIT_TITLE`). Body must:
 
 - Reference the ticket: `Closes #<ticket>` (branch names are `dev/<ticket>`)
-- Include a "Verification (no CI in this repo)" section listing the local gate
+- Include a "Verification" section listing the local gate
   commands and their results
 - Summarize the change set and call out anything a reviewer would ask about
   (holdbacks added, floor bumps, follow-up tickets)
