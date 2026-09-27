@@ -4,7 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import OperationalError
 
+from worker_template.db.retry import DEFAULT_MAX_ATTEMPTS
 from worker_template.middleware.state_tracking import StateTrackingMiddleware
 from worker_template.models.task_execution import TaskStatus
 
@@ -250,3 +252,108 @@ class TestStateTrackingExtractUUID:
 
         result = mw._extract_task_execution_id(msg)
         assert result == label_id
+
+
+class TestStateTrackingRetryBehavior:
+    """Verify @db_retry retries transient OperationalErrors on DB commits."""
+
+    @pytest.fixture
+    def middleware(self):
+        return StateTrackingMiddleware()
+
+    @pytest.fixture(autouse=True)
+    def no_sleep(self):
+        with patch("asyncio.sleep", new=AsyncMock()):
+            yield
+
+    async def test_pre_execute_retries_on_operational_error_then_succeeds(self, middleware):
+        task_exec_id = uuid4()
+        msg = make_message(labels={"task_execution_id": str(task_exec_id)})
+        mock_session, mock_ctx = make_mock_session()
+        mock_maker = MagicMock(return_value=mock_ctx)
+
+        with (
+            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
+        ):
+            mock_update.side_effect = [OperationalError("stmt", {}, Exception("conn lost")), None]
+            result = await middleware.pre_execute(msg)
+
+            assert mock_maker.call_count == 2
+            mock_session.commit.assert_called_once()
+            assert result is msg
+
+    async def test_post_execute_retries_on_operational_error_then_succeeds(self, middleware):
+        task_exec_id = uuid4()
+        msg = make_message(labels={"task_execution_id": str(task_exec_id)})
+        result = make_result(is_err=False)
+        mock_session, mock_ctx = make_mock_session()
+        mock_maker = MagicMock(return_value=mock_ctx)
+
+        with (
+            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
+        ):
+            mock_update.side_effect = [OperationalError("stmt", {}, Exception("conn lost")), None]
+            await middleware.post_execute(msg, result)
+
+            assert mock_maker.call_count == 2
+            mock_session.commit.assert_called_once()
+
+    async def test_on_error_retries_on_operational_error_then_succeeds(self, middleware):
+        task_exec_id = uuid4()
+        msg = make_message(labels={"task_execution_id": str(task_exec_id)})
+        result = make_result(is_err=True)
+        exc = RuntimeError("crash")
+
+        mock_task = MagicMock()
+        mock_task.retry_count = 0
+        mock_task.max_retries = 3
+
+        mock_session, mock_ctx = make_mock_session()
+        mock_maker = MagicMock(return_value=mock_ctx)
+
+        with (
+            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.middleware.state_tracking.get_task_execution", return_value=mock_task),
+            patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
+        ):
+            mock_update.side_effect = [OperationalError("stmt", {}, Exception("conn lost")), None]
+            await middleware.on_error(msg, result, exc)
+
+            assert mock_maker.call_count == 2
+            mock_session.commit.assert_called_once()
+
+    async def test_pre_execute_raises_after_max_attempts(self, middleware):
+        task_exec_id = uuid4()
+        msg = make_message(labels={"task_execution_id": str(task_exec_id)})
+        mock_session, mock_ctx = make_mock_session()
+        mock_maker = MagicMock(return_value=mock_ctx)
+
+        with (
+            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
+        ):
+            mock_update.side_effect = OperationalError("stmt", {}, Exception("conn lost"))
+
+            with pytest.raises(OperationalError):
+                await middleware.pre_execute(msg)
+
+            assert mock_maker.call_count == DEFAULT_MAX_ATTEMPTS
+
+    async def test_pre_execute_does_not_retry_non_operational_error(self, middleware):
+        task_exec_id = uuid4()
+        msg = make_message(labels={"task_execution_id": str(task_exec_id)})
+        mock_session, mock_ctx = make_mock_session()
+        mock_maker = MagicMock(return_value=mock_ctx)
+
+        with (
+            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
+        ):
+            mock_update.side_effect = ValueError("not a db error")
+
+            with pytest.raises(ValueError, match="not a db error"):
+                await middleware.pre_execute(msg)
+
+            assert mock_maker.call_count == 1
