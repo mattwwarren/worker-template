@@ -309,3 +309,41 @@ async def test_always_failing_task_exhausts_retries(
     assert updated is not None
     assert updated.status == TaskStatus.FAILED
     assert updated.retry_count == 1
+
+
+@pytest.mark.integration
+async def test_shadowed_retry_remains_retrying_through_receiver(
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+    retry_broker: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = uuid4()
+    monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_enabled", False)
+    monkeypatch.setattr("worker_template.middleware.state_tracking.settings.task_retry_shadow_mode", True)
+    monkeypatch.setattr(
+        "worker_template.middleware.state_tracking.settings.task_retry_tenant_allowlist", str(tenant_id)
+    )
+    monkeypatch.setattr(
+        "worker_template.middleware.state_tracking.settings.task_retry_task_allowlist", "_always_failing_task"
+    )
+    task = await create_task_execution(
+        session,
+        task_name="_always_failing_task",
+        tenant_id=tenant_id,
+        max_retries=1,
+    )
+    await session.commit()
+
+    await _always_failing_task.kiq(
+        raw_input={
+            "task_execution_id": str(task.id),
+            "tenant_id": str(tenant_id),
+        }
+    )
+
+    async with session_maker() as verify_session:
+        updated = await get_task_execution(verify_session, task.id)
+    assert updated is not None
+    assert updated.status == TaskStatus.RETRYING
+    assert updated.retry_count == 1

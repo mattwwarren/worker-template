@@ -145,6 +145,22 @@ class TestStateTrackingPostExecute:
             mock_maker.assert_not_called()
             mock_update.assert_not_called()
 
+    async def test_skips_when_retry_is_shadowed(self, middleware):
+        task_exec_id = uuid4()
+        msg = make_message(labels={"task_execution_id": str(task_exec_id)})
+        result = make_result(is_err=True, error=RuntimeError("Something went wrong"))
+        result.__dict__["_state_tracking_shadow_retry"] = True
+        mock_maker = MagicMock()
+
+        with (
+            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch("worker_template.middleware.state_tracking.update_task_status") as mock_update,
+        ):
+            await middleware.post_execute(msg, result)
+
+            mock_maker.assert_not_called()
+            mock_update.assert_not_called()
+
 
 class TestStateTrackingOnError:
     @pytest.fixture
@@ -253,6 +269,7 @@ class TestStateTrackingOnError:
                 dispatch_result="shadowed",
             )
             assert result.error is None
+            assert result.__dict__["_state_tracking_shadow_retry"] is True
 
     async def test_sets_failed_when_max_retries_exceeded(self, middleware):
         task_exec_id = uuid4()

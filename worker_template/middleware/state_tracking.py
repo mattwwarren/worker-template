@@ -33,6 +33,7 @@ LOGGER = logging.getLogger(__name__)
 
 _TASK_EXECUTION_ID_KEY = "task_execution_id"
 RAW_INPUT_KEY = "raw_input"
+_SHADOW_RETRY_MARKER = "_state_tracking_shadow_retry"
 
 
 class StateTrackingMiddleware(TaskiqMiddleware):
@@ -67,6 +68,9 @@ class StateTrackingMiddleware(TaskiqMiddleware):
 
         if isinstance(result.error, NoResultError):
             # on_error already dispatched a retry and owns this message's outcome.
+            return
+        if result.__dict__.get(_SHADOW_RETRY_MARKER, False):
+            # on_error recorded a shadowed retry and owns this message's outcome.
             return
 
         async with async_session_maker() as session:
@@ -196,6 +200,9 @@ class StateTrackingMiddleware(TaskiqMiddleware):
                         dispatch_result=TaskDispatchResult.DISPATCH_FAILED,
                     )
                     await session.commit()
+
+            if retry_shadowed:
+                result.__dict__[_SHADOW_RETRY_MARKER] = True
 
         await self._emit_status_event(
             message,
