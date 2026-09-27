@@ -10,12 +10,15 @@ Project-level ship-it for `worker-template`. Runs after `/prep-pr` finishes its
 self-review and quality gates. Covers push, PR creation, and (when
 `.claude/project-config.yaml` allows it) arming auto-merge.
 
-**Until the CI-bootstrap ticket lands, this repo has NO CI and no branch
-protection.** Acceptance is local commands only (`uv run ruff check`,
-`uv run mypy`, `uv run pytest`), which `/prep-pr` has already run and passed by
-the time this command executes. State that explicitly in the PR body so the
-reviewer knows green means "local gates passed", not a workflow run. The config
-pins `pr.auto_merge: false` until required checks exist on `main`.
+**`main` is protected by CI.** `.github/workflows/ci.yml` and
+`validate-template.yml` gate every PR with 7 required status checks:
+Pre-commit checks, Lint, Type Check, Unit Tests, Integration Tests, Coverage
+Check, and Validate (default). `/prep-pr` runs the local gates
+(`uv run ruff check`, `uv run mypy`, `uv run pytest`) before this command
+executes; CI re-runs the equivalent checks remotely and branch protection
+blocks merge until all 7 are green. The config now pins `pr.auto_merge: true`,
+so Step 4 below arms auto-merge and the PR merges automatically once every
+required check passes.
 
 **Arguments:** "$ARGUMENTS"
 
