@@ -235,9 +235,20 @@ guard that keeps the worker's copies in sync.
 - The `k8s/` manifests (postgres/rabbitmq/redis) are for the template repo's
   own dev loop only — `.copierignore` excludes them from generated projects;
   instance infrastructure is managed at workspace level.
-- **No CI in this repo** — acceptance is local gates only
-  (`uv run ruff check`, `uv run mypy`, `uv run pytest`); merging is
-  operator-owned (see `.claude/commands/ship-it.md`).
+- CI (`ci.yml`) runs on every PR to `main` and every push to `main`:
+  Pre-commit checks, Lint (`ruff check` + `ruff format --check`), Type Check
+  (`mypy worker_template`), Unit Tests, Integration Tests (real Postgres via
+  `pytest-docker`), and a Coverage Check that combines both suites' coverage
+  and enforces `--fail-under=90`. `validate-template.yml` templatizes the
+  repo, generates a project via Copier for each `enable_scheduler` matrix
+  leg, and validates the generated output's own pre-commit/lint/mypy/Docker
+  build — see the generated-output drift principle (§7 P4). Together these
+  are the 7 required status checks branch protection enforces on `main`
+  (Pre-commit checks, Lint, Type Check, Unit Tests, Integration Tests,
+  Coverage Check, Validate (default)); merging is via `/ship-it`, which arms
+  `gh pr merge --auto` once they're required (see
+  `.claude/commands/ship-it.md`). Dependency version ceilings follow the
+  same pattern — see §7 P3.
 
 ## Invariants (the short list)
 
