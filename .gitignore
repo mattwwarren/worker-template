@@ -40,5 +40,8 @@ htmlcov/
 # Template output
 .templatized/
 
+# cw session artifacts
+.claude/cw-context.json*
+
 # Uploads
 uploads/
