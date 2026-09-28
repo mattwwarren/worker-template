@@ -180,8 +180,8 @@ Shared skeleton with fastapi-template, near line-for-line:
   `create_session_maker` factories and module-level singletons. Production
   code paths (worker startup, middleware) use `async_session_maker()`
   directly; the `get_session()` generator exists for parity but has no
-  production call site here. See §7 P1 for why psycopg never crosses into
-  application code.
+  production call site here. See §7 P1 for why psycopg is the single driver,
+  sync and async alike.
 - Migrations are ORM-exclusive via Alembic autogenerate; `db/base.py` must
   import every model so `SQLModel.metadata` is complete.
 - `core/config.py` — same pydantic-settings pattern, extended with
@@ -274,17 +274,21 @@ The fuller rationale behind these — the why, not just the what — lives in
 
 ## 7. Principles
 
-### P1. asyncpg is the only Postgres driver in application code
+### P1. psycopg is the only Postgres driver, sync and async alike
 
 `core/config.py`'s `database_url` default and every production session
-factory in `db/session.py` speak `postgresql+asyncpg://`. `psycopg` (the dev
-extra in `pyproject.toml`) appears in exactly one place —
-`worker_template/tests/conftest.py` — where it opens a synchronous
-connection to create the per-xdist-worker test database and to run Alembic
-migrations synchronously; it never appears in `worker_template/` production
-code. Keeping a second driver confined to that one sync boundary means the
-async application path never has to reason about two drivers' connection
-semantics, pooling, or error types.
+factory in `db/session.py` speak `postgresql+psycopg://`, and
+`worker_template/tests/conftest.py`'s synchronous DB-creation helper and
+Alembic sync engine use the same `psycopg` DBAPI, just in synchronous mode.
+Standardizing on one driver means every code path — async application
+traffic, sync test bootstrapping, sync Alembic migrations — shares one
+DBAPI's connection semantics, pooling behavior, and error types, instead of
+the previous asyncpg/psycopg split forcing two drivers' exception hierarchies
+and transaction-sharing quirks to be reasoned about side by side (a
+sync/async transaction-sharing test pitfall the split otherwise invites).
+`psycopg[binary]` is a runtime dependency (`pyproject.toml`), which ships the
+precompiled C extension; production images should track upstream guidance on
+`psycopg[c]` vs `psycopg[binary]` if that tradeoff needs revisiting.
 
 ### P2. Primitives are refreshed via CLI, never hand-edited
 

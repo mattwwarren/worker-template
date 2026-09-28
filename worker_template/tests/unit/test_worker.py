@@ -35,7 +35,7 @@ class TestOnStartup:
     async def test_skips_emitter_init_when_no_redis_url(self, mock_create_engine, mock_init_emitter):
         fake_settings = MagicMock(
             redis_url="",
-            database_url="postgresql+asyncpg://user:pass@localhost/db",
+            database_url="postgresql+psycopg://user:pass@localhost/db",
             validate_config=MagicMock(return_value=[]),
         )
         state = TaskiqState()
