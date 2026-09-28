@@ -4,20 +4,21 @@ version = "0.1.0"
 description = "A TaskIQ async worker service template"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "taskiq>=0.12.4",
+    # Why: capped below 0.13.0 pending the deferred taskiq 0.13.0 evaluation tracked in issue #25.
+    "taskiq>=0.12.4,<0.13.0",
     "taskiq-aio-pika>=0.6.0",
     "taskiq-redis>=1.2.3",
-    "sqlmodel>=0.0.39",
+    "sqlmodel>=0.0.47",
     "asyncpg>=0.31.0",
-    "alembic>=1.18.5",
-    "pydantic-settings>=2.14.2",
-    "prometheus-client>=0.25.0",
+    "alembic>=1.20.0",
+    "pydantic-settings>=2.15.0",
+    "prometheus-client>=0.26.0",
     "ecs-logging>=2.3.0",
     "tenacity>=9.1.4",
-    "fastapi>=0.139.0",
-    "uvicorn[standard]>=0.51.0",
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.54.0",
     "httpx>=0.28.1",
-    "python-socketio>=5.16.3",
+    "python-socketio>=5.17.0",
 ]
 
 [project.optional-dependencies]
@@ -28,9 +29,9 @@ dev = [
     "pytest-cov>=7.1.0",
     "pytest-docker>=3.2.5",
     "filelock>=4.0.3",
-    "psycopg[binary]>=3.3.4",
-    "ruff>=0.15.22",
-    "mypy>=2.3.0",
+    "psycopg[binary]>=3.3.6",
+    "ruff>=0.16.9",
+    "mypy>=2.3.1",
     "pre-commit>=4.6.0",
 ]
 

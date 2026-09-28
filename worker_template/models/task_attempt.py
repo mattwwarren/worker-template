@@ -38,13 +38,13 @@ class TaskAttempt(TimestampedTable, table=True):
         sa_type=PGUUID(as_uuid=True),
         foreign_key="task_execution.id",
         index=True,
-    )  # type: ignore[call-overload]
-    tenant_id: UUID = Field(sa_type=PGUUID(as_uuid=True), index=True)  # type: ignore[call-overload]
+    )
+    tenant_id: UUID = Field(sa_type=PGUUID(as_uuid=True), index=True)
     attempt_number: int = Field(ge=1)
-    status_before: TaskStatus = Field(  # type: ignore[call-overload]
+    status_before: TaskStatus = Field(
         sa_type=sa.Enum(TaskStatus, name="taskstatus", create_constraint=True),
     )
-    status_after: TaskStatus = Field(  # type: ignore[call-overload]
+    status_after: TaskStatus = Field(
         sa_type=sa.Enum(TaskStatus, name="taskstatus", create_constraint=True),
     )
     error_detail: str | None = Field(default=None)
