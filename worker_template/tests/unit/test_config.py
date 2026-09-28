@@ -13,6 +13,10 @@ class TestSettings:
         assert s.health_server_port == 8080
         assert s.task_max_retries == 3
 
+    def test_default_database_url_uses_psycopg_dialect(self):
+        s = Settings()
+        assert s.database_url.startswith("postgresql+psycopg://")
+
     def test_validate_rabbitmq_url_invalid(self):
         with pytest.raises(ValueError, match="amqp://"):
             Settings(RABBITMQ_URL="http://invalid")
