@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     environment: str = "local"
     log_level: str = Field(default="debug", alias="LOG_LEVEL")
     database_url: str = Field(
-        default="postgresql+asyncpg://app:app@localhost:5432/app",
+        default="postgresql+psycopg://app:app@localhost:5432/app",
         alias="DATABASE_URL",
     )
     sqlalchemy_echo: bool = Field(default=False, alias="SQLALCHEMY_ECHO")
