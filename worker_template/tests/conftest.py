@@ -63,6 +63,7 @@ def docker_compose_project_name(
 
 @pytest.fixture(scope="session")
 def docker_services(
+    *,
     docker_compose_command: str,
     docker_compose_file: str,
     docker_compose_project_name: str,

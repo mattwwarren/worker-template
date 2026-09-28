@@ -162,9 +162,7 @@ if [[ -f "${OUTPUT_DIR}/pyproject.toml" ]]; then
         fi
         echo "  Capped: ${pkg}${ceiling}"
     }
-    cap_dependency "ruff" "<0.16" "ruff 0.16 adds lint violations (PLR0917) in generated code."
     cap_dependency "mypy" "<2.4" "gate tooling capped at the minor version the template is verified against."
-    cap_dependency "sqlmodel" "<0.0.43" "sqlmodel 0.0.43+ changes Field typing, failing generated mypy."
 fi
 
 # alembic.ini - no changes needed (doesn't reference worker_template)

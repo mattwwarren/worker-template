@@ -21,6 +21,7 @@ def make_mock_session():
 
 
 def make_task_execution(
+    *,
     task_name="test_task",
     status=TaskStatus.PENDING,
     tenant_id=None,
