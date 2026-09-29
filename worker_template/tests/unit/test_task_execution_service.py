@@ -107,6 +107,28 @@ class TestCreateTaskExecution:
             )
             assert result is mock_task
 
+    async def test_deep_copies_config_snapshot(self):
+        session = make_mock_session()
+        config = {"nested": {"value": "before"}}
+
+        with patch("worker_template.services.task_execution_service.TaskExecution") as mock_te:
+            mock_task = MagicMock()
+            mock_task.id = uuid4()
+            mock_te.return_value = mock_task
+
+            await create_task_execution(
+                session,
+                task_name="configured_task",
+                tenant_id=uuid4(),
+                config_snapshot=config,
+            )
+
+            config["nested"]["value"] = "after"
+
+            stored_config = mock_te.call_args.kwargs["config_snapshot"]
+            assert stored_config == {"nested": {"value": "before"}}
+            assert stored_config is not config
+
 
 class TestGetTaskExecution:
     async def test_returns_task_when_found(self):
