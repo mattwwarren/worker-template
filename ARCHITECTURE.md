@@ -15,16 +15,8 @@ produce the Copier template. Production instances are generated with
 `copier copy` and updated with `copier update`.
 
 Copier variables (`copier.yaml`): `project_name` / `project_slug` /
-`description` (identity), `port` (health server), `multi_tenant`,
-`enable_metrics`, `enable_scheduler`, `database_enabled`.
-
-> **Known gap:** `multi_tenant`, `enable_scheduler`, and `database_enabled`
-> are collected at generation time but are not wired to any conditional
-> generation logic — every generated project currently ships tenant
-> isolation, the scheduler deployment, and TaskExecution tracking regardless
-> of the answers. Only metrics has a working toggle, and it is the
-> **runtime** env var `ENABLE_METRICS` (gates mounting `/metrics` on the
-> health server), not the Copier variable.
+`description` (identity), `port` (health server), `enable_scheduler`
+(scheduler deployment).
 
 ## Process model
 
@@ -124,7 +116,7 @@ top-to-bottom, `post_execute`/`on_error` bottom-to-top:
 
 ```
 PENDING → QUEUED → RUNNING → COMPLETED / FAILED / PARTIAL
-                  ↳ RETRYING (label only — see Known gaps)
+                  ↳ RETRYING → RUNNING (re-enqueued; see below)
                   ↳ CANCELLED
 ```
 
@@ -134,6 +126,24 @@ Creating the row in the first place (`create_task_execution`, which is what
 produces `PENDING`) is the dispatching caller's responsibility, and
 `QUEUED`/`CANCELLED`/`PARTIAL` are states an instance sets itself.
 
+`on_error` re-enqueues for real: when `task.retry_count < task.max_retries`
+and the tenant/task retry gate is enabled, it writes `RETRYING`, then re-kicks
+the same message (same `task_id`, same args/kwargs/labels) via
+`taskiq.kicker.AsyncKicker`, immediately — no delay/backoff, since the shipped
+`AioPikaBroker` has no delay queue configured. The gate is disabled by default
+and requires both non-empty, matching tenant and task allowlists; an empty
+allowlist denies automatic retries. Shadow mode records intended retries as
+nonterminal `RETRYING` rows without dispatching them, leaving an explicit
+operator recovery point. Every retry decision and dispatch outcome is also
+written to the `task_attempt` audit table. If the re-kick itself
+fails to send, the row is reconciled to `FAILED` ("Task failed (retry dispatch
+error)") in the same `on_error` call. On successful dispatch, `on_error` marks
+`result.error` with TaskIQ's `NoResultError` sentinel; `post_execute` checks
+for that sentinel first and returns immediately, so it never clobbers the
+`RETRYING` (or, for a synchronous retry chain such as the `InMemoryBroker`
+under `await_inplace=True`, an already-`COMPLETED`) status the retried
+attempt's own `on_error`/`post_execute` just wrote.
+
 (This section is the authoritative description of the state machine and
 middleware pipeline; other docs point here.)
 
@@ -142,23 +152,22 @@ Two transaction boundaries exist by design, and they are independent:
 - **The task body owns its domain transaction.** Services flush; the task
   commits (same rule as the API template's "endpoints commit").
 - **StateTrackingMiddleware owns the TaskExecution row's transaction**, in
-  its own session, committed in every branch — so the recorded
-  RUNNING/FAILED status survives even when the task's own transaction rolls
-  back.
+  its own session, committed in every branch, with `@db_retry` retrying the
+  commit on transient `OperationalError` — so the recorded RUNNING/FAILED
+  status survives even when the task's own transaction rolls back.
 
 State transitions also emit realtime events (fire-and-forget) — see below.
 
-> **Known gaps:** (1) `RETRYING` is a status label — the middleware
-> increments `retry_count` and records the state, but nothing re-enqueues
-> the message; TaskIQ does not retry automatically and no retry middleware
-> is wired. (2) `db/retry.py` (`@db_retry`, tenacity backoff for transient
-> `OperationalError`) exists and is tested but is not applied to any
-> production call site. (3) There is no idempotency-key pattern;
-> `parent_task_id` supports task trees, not dedup. (4)
+> **Known gaps:** (1) *Resolved* — `on_error` uses a tenant/task-scoped,
+> opt-in retry gate requiring both matching allowlists (with nonterminal shadow
+> mode) and re-enqueues via `AsyncKicker` when `task.retry_count <
+> task.max_retries`; each decision and dispatch outcome is recorded in
+> `task_attempt`; see above. (2) There is no idempotency-key pattern;
+> `parent_task_id` supports task trees, not dedup. (3)
 > `create_task_execution` has no production call site — the shipped example
 > task doesn't thread a `task_execution_id`, so StateTrackingMiddleware
 > no-ops end-to-end for it; wiring row creation into dispatch is left to
-> the instance. Treat all four as instance-level decisions, not shipped
+> the instance. Treat all three as instance-level decisions, not shipped
 > behavior.
 
 ## Data layer
@@ -171,7 +180,8 @@ Shared skeleton with fastapi-template, near line-for-line:
   `create_session_maker` factories and module-level singletons. Production
   code paths (worker startup, middleware) use `async_session_maker()`
   directly; the `get_session()` generator exists for parity but has no
-  production call site here.
+  production call site here. See §7 P1 for why psycopg is the single driver,
+  sync and async alike.
 - Migrations are ORM-exclusive via Alembic autogenerate; `db/base.py` must
   import every model so `SQLModel.metadata` is complete.
 - `core/config.py` — same pydantic-settings pattern, extended with
@@ -226,11 +236,25 @@ guard that keeps the worker's copies in sync.
 - The `k8s/` manifests (postgres/rabbitmq/redis) are for the template repo's
   own dev loop only — `.copierignore` excludes them from generated projects;
   instance infrastructure is managed at workspace level.
-- **No CI in this repo** — acceptance is local gates only
-  (`uv run ruff check`, `uv run mypy`, `uv run pytest`); merging is
-  operator-owned (see `.claude/commands/ship-it.md`).
+- CI (`ci.yml`) runs on every PR to `main` and every push to `main`:
+  Pre-commit checks, Lint (`ruff check` + `ruff format --check`), Type Check
+  (`mypy worker_template`), Unit Tests, Integration Tests (real Postgres via
+  `pytest-docker`), and a Coverage Check that combines both suites' coverage
+  and enforces `--fail-under=90`. `validate-template.yml` templatizes the
+  repo, generates a project via Copier for each `enable_scheduler` matrix
+  leg, and validates the generated output's own pre-commit/lint/mypy/Docker
+  build — see the generated-output drift principle (§7 P4). Together these
+  are the 7 required status checks branch protection enforces on `main`
+  (Pre-commit checks, Lint, Type Check, Unit Tests, Integration Tests,
+  Coverage Check, Validate (default)); merging is via `/ship-it`, which arms
+  `gh pr merge --auto` once they're required (see
+  `.claude/commands/ship-it.md`). Dependency version ceilings follow the
+  same pattern — see §7 P3.
 
 ## Invariants (the short list)
+
+The fuller rationale behind these — the why, not just the what — lives in
+§7/§8 below; this list stays terse on purpose.
 
 1. Async-only, end to end.
 2. Tasks commit their own domain writes; services flush;
@@ -238,7 +262,8 @@ guard that keeps the worker's copies in sync.
 3. Task I/O is dict-at-the-boundary, Pydantic-validated inside the task
    (`tasks/contracts.py`).
 4. Every table extends `TimestampedTable`; every model is imported in
-   `db/base.py`; schema changes go through Alembic autogenerate.
+   `db/base.py`; schema changes go through Alembic autogenerate. *(see §7 P2,
+   §8 A1)*
 5. Tenancy travels in the task contract (`tenant_id` kwarg → ContextVar),
    never ambiently.
 6. Realtime is write-only from the worker, room-scoped per tenant, and can
@@ -246,3 +271,98 @@ guard that keeps the worker's copies in sync.
 7. Task registration is import-driven — new task modules must be imported in
    `tasks/__init__.py`.
 8. The broker is env-switched: tests always run on `InMemoryBroker`.
+
+## 7. Principles
+
+### P1. psycopg is the only Postgres driver, sync and async alike
+
+`core/config.py`'s `database_url` default and every production session
+factory in `db/session.py` speak `postgresql+psycopg://`, and
+`worker_template/tests/conftest.py`'s synchronous DB-creation helper and
+Alembic sync engine use the same `psycopg` DBAPI, just in synchronous mode.
+Standardizing on one driver means every code path — async application
+traffic, sync test bootstrapping, sync Alembic migrations — shares one
+DBAPI's connection semantics, pooling behavior, and error types, instead of
+the previous asyncpg/psycopg split forcing two drivers' exception hierarchies
+and transaction-sharing quirks to be reasoned about side by side (a
+sync/async transaction-sharing test pitfall the split otherwise invites).
+`psycopg[binary]` is a runtime dependency (`pyproject.toml`), which ships the
+precompiled C extension; production images should track upstream guidance on
+`psycopg[c]` vs `psycopg[binary]` if that tradeoff needs revisiting.
+
+### P2. Primitives are refreshed via CLI, never hand-edited
+
+Alembic migration files (`alembic/versions/*.py`) are generated by `alembic
+revision --autogenerate` against the current `SQLModel` metadata
+(`ARCHITECTURE.md`, "Data layer") and are not edited by hand afterward —
+every migration in the repo still carries the unmodified autogenerate
+header. Hand-editing a migration silently decouples it from the model
+diff it was generated to represent, and the next autogenerate run won't
+know to reconcile a change nobody told it about.
+
+### P3. Dependency version ceilings carry an expiry
+
+A holdback ceiling (`[tool.uv].constraint-dependencies` in `pyproject.toml`)
+is only added paired with a tracked follow-up ticket to re-verify and lift
+it — it is a "not yet" ceiling, never a "not ever" one. PR #5 added six
+holdbacks (aio-pika, aiormq, pamqp, redis, mypy, starlette/fastapi) after a
+safe-sweep upgrade; PRs #6 and #7 each lifted their share once the breaking
+major was vetted. `pyproject.toml` currently has no `[tool.uv]` section at
+all — every ceiling that was added has since been resolved, none left to
+silently rot into a permanent floor nobody revisits.
+
+### P4. Generated-output drift is CI-gated, not manually policed
+
+`scripts/templatize.sh` (`Step 6/6`, "remaining hardcoded references")
+fails the build if any literal `worker_template` string leaks into the
+Copier-templatized tree, and `validate-template.yml` runs that guard plus a
+full Copier-generate → pre-commit/lint/mypy/Docker-build cycle, on both the
+default and `enable_scheduler=false` matrix legs, on every PR. This caught
+a real violation once (PR #24 committed `.claude/review-verdict.*` files
+containing the string `worker_template`, which the guard rejected) — the
+mechanism is load-bearing, not aspirational.
+
+### P5. Never inline the package/slug path in long string literals
+
+Source lines whose width depends on the `worker_template` slug can wrap
+differently once `scripts/templatize.sh` substitutes a shorter or longer
+`project_slug`, so `ruff format --check` can pass here and fail on the
+generated output. Hoist any repeated, slug-bearing dotted path into a
+module-level constant instead of inlining it into every f-string —
+`worker_template/tests/unit/test_state_tracking_mw.py`'s
+`_STATE_TRACKING_SETTINGS` is the shipped example: one constant, reused via
+`f"{_STATE_TRACKING_SETTINGS}.task_retry_enabled"` everywhere a settings
+attribute needs monkeypatching, instead of ten copies of the full dotted
+path at ten different line lengths.
+
+## 8. Anti-patterns
+
+### A1. Hand-editing a generated Alembic migration
+
+Editing an already-generated file under `alembic/versions/` instead of
+changing the `SQLModel` table and re-running `alembic revision
+--autogenerate` breaks the invariant that migrations are an exact diff of
+model state (Invariant 4; §7 P2) — the file stops matching what autogenerate
+would produce from the current models, and the next autogenerate run has no
+way to detect or reconcile the manual edit.
+
+### A2. Floating Docker image tags in deployment or test manifests
+
+`k8s/` manifests and `tests/docker-compose.yml` pin Postgres/RabbitMQ/Redis
+to immutable point releases (e.g. `postgres:18.6-alpine`, not
+`postgres:18-alpine`) after PR #26 found that a floating major-version tag
+lets an upstream image publish silently skew the version running in tests
+from the version running in k8s, with no error until behavior actually
+diverges. Any new image reference in either location must be pinned the
+same way.
+
+### A3. Committing ephemeral session/review-artifact output
+
+Files like `.claude/review-verdict.*` are cw/auto-dev session output, not
+source, and must not be committed: besides being noise, they fail
+pre-commit's end-of-file fixer (written without a trailing newline) and,
+because their content contains the literal string `worker_template`, trip
+`scripts/templatize.sh`'s remaining-references guard (§7 P4) on unrelated
+PRs. PR #24 hit this exact failure and had to add an explicit exclusion
+pattern after the fact — new ephemeral output should be `.gitignore`d up
+front instead.

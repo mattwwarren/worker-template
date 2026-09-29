@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col
 
+from worker_template.core.config import settings
 from worker_template.core.logging import get_logging_context
 from worker_template.models.task_execution import TaskExecution, TaskStatus
 
@@ -31,7 +32,7 @@ async def create_task_execution(
     tenant_id: UUID,
     config_snapshot: dict[str, object] | None = None,
     parent_task_id: UUID | None = None,
-    max_retries: int = 3,
+    max_retries: int = settings.task_max_retries,
     total_steps: int | None = None,
 ) -> TaskExecution:
     """Create a new task execution record."""

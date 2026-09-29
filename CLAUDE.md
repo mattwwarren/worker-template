@@ -56,8 +56,14 @@ Tasks use Pydantic models for type-safe serialization:
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) ("Task lifecycle and the middleware
 pipeline") — the authoritative state-machine and middleware-order
-reference. Note: `RETRYING` is a recorded status only; nothing re-enqueues
-the message automatically.
+reference. Note: `on_error` re-enqueues the message (same `task_id`, via
+`AsyncKicker`) when the tenant/task gate permits and `retry_count <
+max_retries`; `post_execute` skips its own status write when a retry was
+dispatched, so it never clobbers
+`RETRYING`. Automatic retries are opt-in through matching tenant and task
+allowlists, shadow mode records intended retries as nonterminal `RETRYING`, and
+each retry decision/dispatch outcome is retained in the append-only
+`task_attempt` audit table.
 
 ### Middleware Pipeline Order
 
@@ -145,9 +151,12 @@ uv run pytest
 - Task contracts (Pydantic models) for all task I/O
 - Middleware pipeline for cross-cutting concerns
 - TaskExecution state tracking for observability
-- Retry status tracking via middleware (`RETRYING` is recorded, not
-  auto-re-enqueued; `db_retry` exists for transient DB failures but must be
-  applied explicitly)
+- Retry status tracking via middleware (`RETRYING` is recorded and the
+  message is re-enqueued via `AsyncKicker` when both tenant/task allowlists
+  permit; shadow mode records nonterminal intended retries and the append-only
+  `task_attempt` audit table covers rollout and dispatch outcomes; `db_retry`
+  wraps StateTrackingMiddleware's own-session commits for transient DB
+  failures)
 
 ### Testing Patterns
 

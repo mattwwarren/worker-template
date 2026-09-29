@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     environment: str = "local"
     log_level: str = Field(default="debug", alias="LOG_LEVEL")
     database_url: str = Field(
-        default="postgresql+asyncpg://app:app@localhost:5432/app",
+        default="postgresql+psycopg://app:app@localhost:5432/app",
         alias="DATABASE_URL",
     )
     sqlalchemy_echo: bool = Field(default=False, alias="SQLALCHEMY_ECHO")
@@ -117,6 +117,26 @@ class Settings(BaseSettings):
         le=100,
         alias="TASK_MAX_RETRIES",
         description="Default maximum retry attempts for failed tasks",
+    )
+    task_retry_enabled: bool = Field(
+        default=False,
+        alias="TASK_RETRY_ENABLED",
+        description="Enable automatic task retries after the retry gate is evaluated",
+    )
+    task_retry_shadow_mode: bool = Field(
+        default=True,
+        alias="TASK_RETRY_SHADOW_MODE",
+        description="Record eligible retries without dispatching them",
+    )
+    task_retry_tenant_allowlist: str = Field(
+        default="",
+        alias="TASK_RETRY_TENANT_ALLOWLIST",
+        description="Comma-separated tenant UUIDs allowed to use automatic retries",
+    )
+    task_retry_task_allowlist: str = Field(
+        default="",
+        alias="TASK_RETRY_TASK_ALLOWLIST",
+        description="Comma-separated task names allowed to use automatic retries",
     )
 
     # Multi-tenancy

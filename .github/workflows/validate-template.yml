@@ -31,11 +31,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Single entry until #12 wires multi_tenant/enable_scheduler/database_enabled
-        # to generation output - expand this matrix then.
+        # enable_scheduler is the only generation-time toggle (multi_tenant /
+        # database_enabled / enable_metrics prompts were removed in #12), so the
+        # matrix covers it on (default) and off.
         include:
           - name: default
             data_args: ""
+          - name: no-scheduler
+            data_args: "--data enable_scheduler=false"
 
     name: Validate (${{ matrix.name }})
 
@@ -60,6 +63,21 @@ jobs:
             --defaults --trust \
             --data project_name="Test Project" \
             ${{ matrix.data_args }}
+
+      - name: Scheduler subsystem excluded
+        if: matrix.name == 'no-scheduler'
+        run: |
+          cd /tmp/test-project
+          for f in test_project/scheduler.py test_project/tests/unit/test_scheduler.py scripts/start-scheduler.sh; do
+            if [ -e "$f" ]; then
+              echo "::error::$f should be excluded when enable_scheduler=false"
+              exit 1
+            fi
+          done
+          if grep -q 'component: scheduler' devspace.yaml; then
+            echo "::error::devspace.yaml still contains the scheduler deployment"
+            exit 1
+          fi
 
       - name: Install dependencies
         run: cd /tmp/test-project && uv sync --extra dev

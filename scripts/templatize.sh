@@ -90,6 +90,7 @@ EXCLUDE_PATTERNS=(
     # cw session artifacts (not project template content)
     ".claude/cw-context.json*"
     ".claude/review-verdict.*"
+    ".cw"
 )
 
 # Build rsync exclude arguments
@@ -161,9 +162,7 @@ if [[ -f "${OUTPUT_DIR}/pyproject.toml" ]]; then
         fi
         echo "  Capped: ${pkg}${ceiling}"
     }
-    cap_dependency "ruff" "<0.16" "ruff 0.16 adds lint violations (PLR0917) in generated code."
     cap_dependency "mypy" "<2.4" "gate tooling capped at the minor version the template is verified against."
-    cap_dependency "sqlmodel" "<0.0.43" "sqlmodel 0.0.43+ changes Field typing, failing generated mypy."
 fi
 
 # alembic.ini - no changes needed (doesn't reference worker_template)
@@ -209,6 +208,44 @@ if [[ -f "${OUTPUT_DIR}/devspace.yaml" ]]; then
         sed -i "s/worker_template/${SED_REPLACEMENT}/g" "${OUTPUT_DIR}/devspace.yaml"
         echo "  Updated: devspace.yaml"
     fi
+fi
+
+# devspace.yaml - gate the scheduler deployment on the enable_scheduler answer.
+# Root devspace.yaml stays plain YAML so devspace can run against main directly.
+# The {%- %} tags swallow the preceding newline so the rendered file carries no
+# stray blank lines either way (generated pre-commit runs end-of-file-fixer).
+if [[ -f "${OUTPUT_DIR}/devspace.yaml" ]]; then
+    DEVSPACE_FILE="${OUTPUT_DIR}/devspace.yaml"
+    sed -i \
+        -e 's/^\( *create_deployments worker\) scheduler$/\1{% if enable_scheduler %} scheduler{% endif %}/' \
+        -e 's/"Deploying: worker + scheduler"/"Deploying: worker{% if enable_scheduler %} + scheduler{% endif %}"/' \
+        -e 's/(infra + worker + scheduler)/(infra + worker{% if enable_scheduler %} + scheduler{% endif %})/' \
+        "${DEVSPACE_FILE}"
+    awk '
+        function flush_blanks() { for (; blanks > 0; blanks--) print "" }
+        /^$/ { blanks++; next }
+        {
+            if (in_block && ($0 ~ /^[^ #]/ || $0 ~ /^  [^ #]/)) {
+                print "{%- endif %}"
+                in_block = 0
+            }
+            if ($0 ~ /^[^ #]/) in_deployments = ($0 == "deployments:")
+            if (in_deployments && $0 == "  scheduler:") {
+                print "{%- if enable_scheduler %}"
+                in_block = 1
+            }
+            flush_blanks()
+            print
+        }
+        END { if (in_block) print "{%- endif %}"; else flush_blanks() }
+    ' "${DEVSPACE_FILE}" > "${DEVSPACE_FILE}.tmp"
+    mv "${DEVSPACE_FILE}.tmp" "${DEVSPACE_FILE}"
+    if ! grep -qx '{%- if enable_scheduler %}' "${DEVSPACE_FILE}" \
+        || ! grep -q 'create_deployments worker{% if enable_scheduler %} scheduler{% endif %}$' "${DEVSPACE_FILE}"; then
+        echo -e "${RED}ERROR: could not gate devspace.yaml scheduler deployment on enable_scheduler${NC}"
+        exit 1
+    fi
+    echo "  Gated: devspace.yaml scheduler deployment on enable_scheduler"
 fi
 
 # .pre-commit-config.yaml - mypy args reference the package

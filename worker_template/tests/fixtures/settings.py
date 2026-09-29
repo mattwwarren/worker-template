@@ -12,7 +12,7 @@ def test_settings() -> Settings:
         app_name="worker_template_test",
         environment="test",
         LOG_LEVEL="debug",
-        DATABASE_URL="postgresql+asyncpg://app:app@localhost:5432/app_test",
+        DATABASE_URL="postgresql+psycopg://app:app@localhost:5432/app_test",
         RABBITMQ_URL="amqp://guest:guest@localhost:5672/",
         REDIS_URL="redis://localhost:6379/0",
     )

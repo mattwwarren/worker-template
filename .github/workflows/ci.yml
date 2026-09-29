@@ -214,4 +214,4 @@ jobs:
       - name: Combine coverage and check threshold
         run: |
           uv run coverage combine .coverage.unit .coverage.integration
-          uv run coverage report --fail-under=60
+          uv run coverage report --fail-under=90

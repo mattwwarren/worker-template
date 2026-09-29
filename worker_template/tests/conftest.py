@@ -63,6 +63,7 @@ def docker_compose_project_name(
 
 @pytest.fixture(scope="session")
 def docker_services(
+    *,
     docker_compose_command: str,
     docker_compose_file: str,
     docker_compose_project_name: str,
@@ -151,7 +152,7 @@ def database_url(
 
     db_name = get_worker_database_name(worker_id)
     create_database_if_not_exists(docker_ip, port, db_name)
-    url = f"postgresql+asyncpg://app:app@{docker_ip}:{port}/{db_name}"
+    url = f"postgresql+psycopg://app:app@{docker_ip}:{port}/{db_name}"
     os.environ["DATABASE_URL"] = url
     return url
 
@@ -162,20 +163,14 @@ def alembic_config(database_url: str) -> Config:
     project_root = Path(__file__).parent.parent.parent
     alembic_ini_path = project_root / "alembic.ini"
     config = Config(str(alembic_ini_path))
-    config.set_main_option(
-        "sqlalchemy.url",
-        database_url.replace("postgresql+asyncpg", "postgresql+psycopg"),
-    )
+    config.set_main_option("sqlalchemy.url", database_url)
     return config
 
 
 @pytest.fixture(scope="session")
 def alembic_engine(database_url: str) -> Generator[Engine]:
     """Sync engine for running Alembic migrations."""
-    url = make_url(database_url)
-    if url.drivername.endswith("asyncpg"):
-        url = url.set(drivername=url.drivername.replace("asyncpg", "psycopg"))
-    engine = create_engine(url)
+    engine = create_engine(make_url(database_url))
     yield engine
     engine.dispose()
 
