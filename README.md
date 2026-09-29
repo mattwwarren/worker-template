@@ -42,7 +42,7 @@ devspace dev
 
 ### Task Flow
 
-1. Client calls `task.kiq(raw_input=input.model_dump())` to enqueue
+1. Client calls `task.kiq(input.model_dump())` to enqueue
 2. Broker delivers message to worker
 3. Middleware pipeline: logging -> tenant -> metrics -> state tracking
 4. Task validates input via `model_validate()`
