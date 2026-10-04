@@ -1,7 +1,8 @@
 """Integration tests for TaskExecution service."""
 
 from typing import Any
-from uuid import uuid4
+from unittest.mock import AsyncMock
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -10,6 +11,7 @@ from worker_template.broker import broker
 from worker_template.middleware import register_middleware
 from worker_template.middleware.state_tracking import StateTrackingMiddleware
 from worker_template.models.task_execution import TaskStatus
+from worker_template.realtime.contracts import TASK_COMPLETED, TASK_STATUS_CHANGED
 from worker_template.services.task_execution_service import (
     create_task_execution,
     get_child_tasks,
@@ -17,9 +19,11 @@ from worker_template.services.task_execution_service import (
     list_task_executions,
     update_task_status,
 )
+from worker_template.tasks.example_task import dispatch_example_task, example_task
 
 _ATTEMPT_COUNTS: dict[str, int] = {}
 _STATE_TRACKING_SETTINGS = "worker_template.middleware.state_tracking.settings"
+_SESSION_MAKER = "worker_template.db.session.async_session_maker"
 
 
 @broker.task
@@ -48,7 +52,7 @@ async def retry_broker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> Any:
     """Point StateTrackingMiddleware at the test DB and run retries synchronously."""
-    monkeypatch.setattr("worker_template.middleware.state_tracking.async_session_maker", session_maker)
+    monkeypatch.setattr(_SESSION_MAKER, session_maker)
     monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_enabled", True)
     monkeypatch.setattr(f"{_STATE_TRACKING_SETTINGS}.task_retry_shadow_mode", False)
     if not any(isinstance(mw, StateTrackingMiddleware) for mw in test_broker.middlewares):
@@ -336,3 +340,52 @@ async def test_shadowed_retry_remains_retrying_through_receiver(
     assert updated is not None
     assert updated.status == TaskStatus.RETRYING
     assert updated.retry_count == 1
+
+
+@pytest.mark.integration
+async def test_dispatch_example_task_runs_pending_to_completed(
+    session_maker: async_sessionmaker[AsyncSession],
+    retry_broker: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tenant_id = uuid4()
+    observed: list[tuple[str, UUID, TaskStatus | None]] = []
+
+    async def _record(event_tenant_id: UUID, event: str, data: Any) -> None:
+        # Record only: emit failures are swallowed by the middleware, so asserting here would hide errors.
+        async with session_maker() as event_session:
+            row = await get_task_execution(event_session, data.task_id)
+        observed.append((event, data.task_id, row.status if row is not None else None))
+
+    emit_mock = AsyncMock(side_effect=_record)
+    monkeypatch.setattr("worker_template.middleware.state_tracking.emit_task_event", emit_mock)
+
+    dispatched, kicked = await dispatch_example_task(
+        tenant_id=tenant_id,
+        document_url="https://example.com/doc.pdf",
+        output_format="pdf",
+    )
+
+    assert dispatched.status == TaskStatus.PENDING
+
+    result = await kicked.wait_result()
+    assert result.is_err is False
+    assert result.return_value["success"] is True
+
+    async with session_maker() as verify_session:
+        updated = await get_task_execution(verify_session, dispatched.id)
+    assert updated is not None
+    assert updated.status == TaskStatus.COMPLETED
+    assert updated.started_at is not None
+    assert updated.completed_at is not None
+    assert updated.status_message == "Task completed successfully"
+    assert updated.error_detail is None
+
+    assert observed == [
+        (TASK_STATUS_CHANGED, dispatched.id, TaskStatus.RUNNING),
+        (TASK_COMPLETED, dispatched.id, TaskStatus.COMPLETED),
+    ]
+    first_call, second_call = emit_mock.await_args_list
+    assert first_call.args[2].status == "running"
+    assert first_call.args[2].tenant_id == tenant_id
+    assert second_call.args[2].task_name == example_task.task_name
