@@ -13,6 +13,8 @@ from worker_template.realtime.contracts import (
     TASK_STATUS_CHANGED,
 )
 
+_SESSION_MAKER = "worker_template.db.session.async_session_maker"
+
 
 def make_message(task_name="test_task", labels=None, kwargs=None):
     """Create a mock TaskIQ message."""
@@ -199,7 +201,7 @@ class TestPreExecuteEmit:
         mock_maker = MagicMock(return_value=mock_ctx)
 
         with (
-            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch(_SESSION_MAKER, mock_maker),
             patch("worker_template.middleware.state_tracking.update_task_status", new_callable=AsyncMock),
             patch(
                 "worker_template.middleware.state_tracking.emit_task_event",
@@ -234,7 +236,7 @@ class TestPostExecuteEmit:
         mock_maker = MagicMock(return_value=mock_ctx)
 
         with (
-            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch(_SESSION_MAKER, mock_maker),
             patch("worker_template.middleware.state_tracking.update_task_status", new_callable=AsyncMock),
             patch(
                 "worker_template.middleware.state_tracking.emit_task_event",
@@ -260,7 +262,7 @@ class TestPostExecuteEmit:
         mock_maker = MagicMock(return_value=mock_ctx)
 
         with (
-            patch("worker_template.middleware.state_tracking.async_session_maker", mock_maker),
+            patch(_SESSION_MAKER, mock_maker),
             patch("worker_template.middleware.state_tracking.update_task_status", new_callable=AsyncMock),
             patch(
                 "worker_template.middleware.state_tracking.emit_task_event",

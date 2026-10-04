@@ -17,8 +17,8 @@ from taskiq import NoResultError, TaskiqMessage, TaskiqMiddleware, TaskiqResult
 from taskiq.kicker import AsyncKicker
 
 from worker_template.core.config import settings
+from worker_template.db import session as db_session
 from worker_template.db.retry import db_retry
-from worker_template.db.session import async_session_maker
 from worker_template.models.task_attempt import TaskDispatchResult
 from worker_template.models.task_execution import TaskExecution, TaskStatus
 from worker_template.realtime.contracts import (
@@ -110,7 +110,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         if task_execution_id is None:
             return message
 
-        async with async_session_maker() as session:
+        async with db_session.async_session_maker() as session:
             await update_task_status(
                 session,
                 task_execution_id,
@@ -135,7 +135,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
             # on_error recorded a shadowed retry and owns this message's outcome.
             return
 
-        async with async_session_maker() as session:
+        async with db_session.async_session_maker() as session:
             if result.is_err:
                 await update_task_status(
                     session,
@@ -190,7 +190,7 @@ class StateTrackingMiddleware(TaskiqMiddleware):
         """Record an error, retrying with invocation-scoped idempotency state."""
         error_detail = f"{type(exception).__name__}: {exception}"
 
-        async with async_session_maker() as session:
+        async with db_session.async_session_maker() as session:
             task = await get_task_execution(session, task_execution_id)
             ctx = _ErrorContext(
                 session=session,

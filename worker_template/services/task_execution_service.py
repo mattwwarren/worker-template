@@ -1,5 +1,6 @@
 """Task execution data access service."""
 
+import copy
 import logging
 from datetime import UTC, datetime
 from uuid import UUID
@@ -39,7 +40,7 @@ async def create_task_execution(
     task = TaskExecution(
         task_name=task_name,
         tenant_id=tenant_id,
-        config_snapshot=config_snapshot,
+        config_snapshot=copy.deepcopy(config_snapshot) if config_snapshot is not None else None,
         parent_task_id=parent_task_id,
         max_retries=max_retries,
         total_steps=total_steps,

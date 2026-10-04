@@ -10,9 +10,15 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from uuid import UUID
+
+from taskiq import AsyncTaskiqTask
 
 from worker_template.broker import broker
 from worker_template.core.logging import get_logging_context
+from worker_template.db import session as db_session
+from worker_template.models.task_execution import TaskExecution
+from worker_template.services.task_execution_service import create_task_execution
 from worker_template.tasks.contracts import ExampleTaskInput, ExampleTaskOutput
 
 LOGGER = logging.getLogger(__name__)
@@ -69,3 +75,29 @@ async def example_task(raw_input: dict[str, Any]) -> dict[str, Any]:
     LOGGER.info("example_task_completed", extra={**context, "result_url": result_url})
 
     return output.model_dump()
+
+
+async def dispatch_example_task(
+    *,
+    tenant_id: UUID,
+    document_url: str,
+    output_format: str = "pdf",
+) -> tuple[TaskExecution, AsyncTaskiqTask[dict[str, Any]]]:
+    """Create a tracked PENDING TaskExecution row, commit it, then enqueue example_task.
+
+    Copy this pattern for new tasks: the row id travels inside raw_input and
+    the call is keyword-form, so StateTrackingMiddleware and TenantMiddleware
+    (which read only message.kwargs/labels, never message.args) engage.
+    """
+    async with db_session.async_session_maker() as session:
+        task_execution = await create_task_execution(session, task_name=example_task.task_name, tenant_id=tenant_id)
+        await session.commit()
+
+    task_input = ExampleTaskInput(
+        tenant_id=tenant_id,
+        document_url=document_url,
+        output_format=output_format,
+        task_execution_id=task_execution.id,
+    )
+    kicked = await example_task.kiq(raw_input=task_input.model_dump())
+    return task_execution, kicked

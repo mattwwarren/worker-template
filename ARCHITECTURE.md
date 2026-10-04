@@ -51,7 +51,7 @@ imported there does not exist as far as the broker is concerned.
 ## Layering
 
 ```
-client code:  task.kiq(input.model_dump())
+client code:  task.kiq(raw_input=input.model_dump())
     │
     ▼  RabbitMQ (AioPika)
 Middleware pipeline (logging → tenant → metrics → state tracking)
@@ -123,8 +123,10 @@ PENDING → QUEUED → RUNNING → COMPLETED / FAILED / PARTIAL
 Of these, the middleware itself sets only `RUNNING` (pre_execute),
 `COMPLETED`/`FAILED` (post_execute), and `RETRYING`/`FAILED` (on_error).
 Creating the row in the first place (`create_task_execution`, which is what
-produces `PENDING`) is the dispatching caller's responsibility, and
-`QUEUED`/`CANCELLED`/`PARTIAL` are states an instance sets itself.
+produces `PENDING`) is the dispatching caller's responsibility, shown by
+`dispatch_example_task` in `tasks/example_task.py`.
+`QUEUED`/`CANCELLED`/`PARTIAL` remain states an instance sets itself; the
+template ships no code path for them.
 
 `on_error` re-enqueues for real: when `task.retry_count < task.max_retries`
 and the tenant/task retry gate is enabled, it writes `RETRYING`, then re-kicks
@@ -156,6 +158,10 @@ Two transaction boundaries exist by design, and they are independent:
   commit on transient `OperationalError` — so the recorded RUNNING/FAILED
   status survives even when the task's own transaction rolls back.
 
+The dispatching caller (`dispatch_example_task`) is a third committer outside
+the task body and the middleware: it commits the `TaskExecution` row in its
+own session before enqueueing, so the middleware's separate session can read it.
+
 State transitions also emit realtime events (fire-and-forget) — see below.
 
 > **Known gaps:** (1) *Resolved* — `on_error` uses a tenant/task-scoped,
@@ -163,11 +169,14 @@ State transitions also emit realtime events (fire-and-forget) — see below.
 > mode) and re-enqueues via `AsyncKicker` when `task.retry_count <
 > task.max_retries`; each decision and dispatch outcome is recorded in
 > `task_attempt`; see above. (2) There is no idempotency-key pattern;
-> `parent_task_id` supports task trees, not dedup. (3)
-> `create_task_execution` has no production call site — the shipped example
-> task doesn't thread a `task_execution_id`, so StateTrackingMiddleware
-> no-ops end-to-end for it; wiring row creation into dispatch is left to
-> the instance. Treat all three as instance-level decisions, not shipped
+> `parent_task_id` supports task trees, not dedup. (3) The example task now
+> has a demonstrated dispatch path: `dispatch_example_task` creates the
+> `PENDING` row and threads `task_execution_id` through keyword-form
+> `raw_input`, so state tracking and realtime events fire end-to-end. The row
+> is committed before the enqueue, so a failed or lost enqueue leaves an
+> orphaned `PENDING` row. There is no outbox, recovery, or reconciliation for
+> that case; it is accepted as non-blocking and recorded here rather than
+> solved. Treat (2) and (3) as instance-level decisions, not shipped
 > behavior.
 
 ## Data layer
@@ -177,11 +186,12 @@ Shared skeleton with fastapi-template, near line-for-line:
 - `TimestampedTable` (`models/base.py`) — server-generated UUID PKs
   (`gen_random_uuid()`), timezone-aware DB-managed timestamps.
 - `db/session.py` — same `PoolConfig` / `create_db_engine` /
-  `create_session_maker` factories and module-level singletons. Production
-  code paths (worker startup, middleware) use `async_session_maker()`
-  directly; the `get_session()` generator exists for parity but has no
-  production call site here. See §7 P1 for why psycopg is the single driver,
-  sync and async alike.
+  `create_session_maker` factories and module-level singletons. The
+  middleware (`state_tracking.py`) and `dispatch_example_task` look up
+  `db_session.async_session_maker` as a module attribute at call time, so
+  test fixtures can rebind it; the `get_session()` generator exists for
+  parity but has no production call site here. See §7 P1 for why psycopg
+  is the single driver, sync and async alike.
 - Migrations are ORM-exclusive via Alembic autogenerate; `db/base.py` must
   import every model so `SQLModel.metadata` is complete.
 - `core/config.py` — same pydantic-settings pattern, extended with

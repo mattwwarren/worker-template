@@ -108,6 +108,34 @@ class TestCreateTaskExecution:
             )
             assert result is mock_task
 
+    async def test_config_snapshot_is_deep_copied(self):
+        session = make_mock_session()
+        tenant_id = uuid4()
+        inner = [1, 2]
+        outer = {"inner": inner}
+        config: dict[str, object] = {"outer": outer}
+
+        with patch("worker_template.services.task_execution_service.TaskExecution") as mock_te:
+            mock_task = MagicMock()
+            mock_task.id = uuid4()
+            mock_te.return_value = mock_task
+
+            await create_task_execution(
+                session,
+                task_name="snapshot_task",
+                tenant_id=tenant_id,
+                config_snapshot=config,
+            )
+
+        snapshot = mock_te.call_args.kwargs["config_snapshot"]
+        assert snapshot == config
+        assert snapshot is not config
+        assert snapshot["outer"] is not config["outer"]
+
+        inner.append(3)
+
+        assert snapshot == {"outer": {"inner": [1, 2]}}
+
 
 class TestGetTaskExecution:
     async def test_returns_task_when_found(self):
