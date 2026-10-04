@@ -48,7 +48,7 @@ worker-template/
 ### Task Contract Pattern
 
 Tasks use Pydantic models for type-safe serialization:
-- `TaskInput` base: includes tenant_id, priority, parent_task_id
+- `TaskInput` base: includes tenant_id, priority, parent_task_id, task_execution_id
 - `TaskOutput` base: includes success, result_url, error_detail
 - `model_dump()` to queue, `model_validate()` on worker
 
