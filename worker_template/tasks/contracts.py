@@ -26,11 +26,16 @@ DEFAULT_PRIORITY = 5
 
 
 class TaskInput(BaseModel):
-    """Base for all task inputs. Every task carries tenant context."""
+    """Base for all task inputs. Every task carries tenant context.
+
+    ``task_execution_id`` is set by the dispatcher (see ``dispatch_example_task``)
+    after it creates the TaskExecution row, so StateTrackingMiddleware engages.
+    """
 
     tenant_id: UUID
     priority: int = Field(default=DEFAULT_PRIORITY, ge=MIN_PRIORITY, le=MAX_PRIORITY)
     parent_task_id: UUID | None = None
+    task_execution_id: UUID | None = None
 
 
 class TaskOutput(BaseModel):
