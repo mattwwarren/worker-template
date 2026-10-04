@@ -386,6 +386,6 @@ async def test_dispatch_example_task_runs_pending_to_completed(
         (TASK_COMPLETED, dispatched.id, TaskStatus.COMPLETED),
     ]
     first_call, second_call = emit_mock.await_args_list
-    assert first_call.args[2].status == "running"
+    assert first_call.args[2].status == TaskStatus.RUNNING.value
     assert first_call.args[2].tenant_id == tenant_id
     assert second_call.args[2].task_name == example_task.task_name
